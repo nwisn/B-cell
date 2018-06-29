@@ -16,6 +16,7 @@ output:
 
 ```{r}
 load("data.RData")
+df$`Device Type` <- relevel(df$`Device Type`, ref = "HMII")
 suppressMessages(require(knitr, quietly = T))
 suppressMessages(require(kableExtra, quietly = T))
 suppressMessages(require(rmarkdown, quietly = T))
@@ -252,7 +253,7 @@ for(ii in c(1:length(plots.ts))){
         sumtable <- sumtable$coefficients[-1, c(4:5)] # drop intercept
         sigsum <- sumtable[sumtable[,2] <= 0.05, , drop = F]
         cat("  \n###", rownames(qtable)[ii], "\n")
-        print(kable(sigsum, row.names = T) %>%
+        print(kable(sigsum[order(sigsum[,2]),], row.names = T) %>%
             kable_styling(bootstrap_options = c("striped", 
                                                 "hover", 
                                                 "condensed",
