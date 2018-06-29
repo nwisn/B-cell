@@ -209,7 +209,8 @@ for(ii in c(1:length(plots.ts))){
 
 ```{r, eval = T}
 require(reshape2, quietly = T)
-df.long <- melt(df, id.vars = colnames(df)[1:13])
+df.HMII <- subset(df, df$`Device Type`=="HMII")
+df.long <- melt(df.HMII, id.vars = colnames(df)[1:13])
 
 
 groups <- make.names(c("AgeGreater60", 
@@ -229,9 +230,12 @@ plots.ts <- lapply(unique(df.long$variable), function(this_var){
         ggplot(subset(df.long, df.long$variable == this_var)) +
             aes(x = Time, y = value, group = PatientID) +
             aes_string(color = this_groups, fill = this_groups) +
-            geom_line(alpha = .1) + 
-            geom_point(alpha = .1) + 
-            stat_smooth(aes_string(group = this_groups), method = "loess", span = 1) +
+            geom_line(alpha = 0) + 
+            geom_point(alpha = 0) + 
+            #stat_smooth(aes_string(group = this_groups), method = "loess", span = 1) +
+            stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("point"), position = position_dodge(.5)) + 
+            stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("line"), position = position_dodge(.5)) + 
+            stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes_string(group = this_groups), position = position_dodge(.5)) + 
             scale_color_aaas() + scale_fill_aaas() +
             xlab("Time (days after surgery)") +
             ylab(this_var) + 
@@ -258,7 +262,7 @@ suppressMessages(require(lmerTest, quietly = TRUE))
 suppressMessages(require(car, quietly = TRUE))
 require(reshape2, quietly = TRUE)
 
-df.lmer <- df
+df.lmer <- df.HMII
 names(df.lmer) <- make.names(names(df.lmer), unique = TRUE)
 
 groupvars.ix <- c(3,4,5,7,8,9,11)
