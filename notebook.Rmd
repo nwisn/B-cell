@@ -1,6 +1,6 @@
 ---
 title: "Analysis of B-cell markers in MCS device patients"
-subtitle: "Statistical Notebook"
+subtitle: "Statistical Workbook"
 author: "Nicholas Wisniewski"
 date: June 28, 2018
 output:
@@ -16,8 +16,11 @@ output:
 ---
 
 ```{r load_libraries, include=FALSE}
-load("data.RData")
+load("data_combined.RData")
 df$`Device Type` <- relevel(df$`Device Type`, ref = "HMII")
+bcellcyto <- c(14:42,43:80)
+
+
 suppressMessages(require(knitr, quietly = T))
 suppressMessages(require(kableExtra, quietly = T))
 suppressMessages(require(rmarkdown, quietly = T))
@@ -41,10 +44,10 @@ double_standardize <- function(x, niter = 100) {
 
 ## Raw data
 
-The raw data is shown below. There were `r nrow(df)` rows and `r ncol(df)` columns, consisting of `r nlevels(df$PatientID)` patients sampled over `r length(unique(df$Time))` timepoints. However, there is a significant amount of missing data, resulting in only `r nrow(df) - length(Reduce(intersect, apply(df[,14:42], 2, function(x) which(is.na(x)))))` usable datapoints.
+The raw data is shown below. There were `r nrow(df)` rows and `r ncol(df)` columns, consisting of `r nlevels(df$PatientID)` patients sampled over `r length(unique(df$Time))` timepoints. However, there is a significant amount of missing data, resulting in only `r nrow(df) - length(Reduce(intersect, apply(df[,bcellcyto], 2, function(x) which(is.na(x)))))` usable datapoints.
 
 ```{r show_raw_data, message=FALSE}
-missing.ix <- Reduce(intersect, apply(df[,14:42], 2, function(x) which(is.na(x))))
+missing.ix <- Reduce(intersect, apply(df[,bcellcyto], 2, function(x) which(is.na(x))))
 df.raw <- df[-missing.ix,]
 df.raw <- df.raw[order(df.raw$PatientID),]
 rownames(df.raw) <- 1:nrow(df.raw)
@@ -70,7 +73,7 @@ kable(df.raw,
 
 We double standardized the data and biclustered it. We found 3 clusters of patients, and 3 clusters of B-cells.
 
-```{r sample_correlation_heatmap, message=F, fig.height=7}
+```{r sample_correlation_heatmap, message=F, fig.height=10}
 require(pheatmap, quietly = T)
 require(RColorBrewer, quietly = T)
 
@@ -80,24 +83,32 @@ colorfun <- function(nlevels, ...){
     if(nlevels <=10) return(pal_d3(...)(nlevels))
 } 
 
-annotation.col <- df.raw[,c(1,3,4,6,7,8,9,10,11,12)]
+annotation.row <- data.frame("Molecule" = factor(c("none", rep("B-cell",29), rep("cytokine",38))))
+annotation.col <- df.raw[,c(1,4,5,6,7,8,9,10,11,12,13)]
 annotation.colors <- lapply(colnames(annotation.col), function(nam){
     colrs <- colorfun(nlevels(annotation.col[[nam]]))
     names(colrs) <- levels(annotation.col[[nam]])
     return(colrs)
 })
 names(annotation.colors) <- colnames(annotation.col)
+annotation.colors[["Molecule"]] <- colorfun(nlevels(annotation.row$Molecule))
+names(annotation.colors[["Molecule"]]) <- levels(annotation.row$Molecule)
 
-df.patient <- double_standardize(t(df.raw[,c(2,14:42)]))
+df.patient <- double_standardize(t(na.omit(df.raw[,c(3,bcellcyto)])))
+rownames(annotation.row) <- rownames(df.patient)
 pheatmap(df.patient, 
          color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
          breaks = c(seq(-max(abs(df.patient), na.rm=T), 0, length.out = 50), seq(0.001, max(abs(df.patient), na.rm=T), length.out = 50)),
          #scale = "row",
          fontsize = 7,
-         cutree_rows = 3,
-         cutree_cols = 3,
+         cutree_rows = 4,
+         cutree_cols = 4,
+         cluster_cols = T,
+         cluster_rows = T,
          annotation_col = annotation.col,
-         annotation_colors = annotation.colors
+         annotation_row = annotation.row,
+         annotation_colors = annotation.colors,
+         clustering_method = "ward.D2"
 )
 ```
 
@@ -115,10 +126,11 @@ We computed the statistical associations between sample groups specified by the 
 We computed metadata factors that were statistically associated with survival.
 
 ```{r survival_metadata, message=FALSE}
-isfactor <- which(sapply(df, is.factor))[-1]
+df.factors <- df[match(levels(df$PatientID), df$PatientID),]
+isfactor <- which(sapply(df.factors, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("Survival","Outcome", "LowIntermacs"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$Survival)
+                          table(df.factors[,this_factor], df.factors$Survival)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -165,7 +177,7 @@ We computed metadata factors that were statistically associated with a binarized
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("LowIntermacs", "InterMACS"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$LowIntermacs)
+                          table(df.factors[,this_factor], df.factors$LowIntermacs)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -213,7 +225,7 @@ We computed metadata factors that were statistically associated with sensitizati
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("Sensitized"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$Sensitized)
+                          table(df.factors[,this_factor], df.factors$Sensitized)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -263,7 +275,7 @@ We computed metadata factors that were statistically associated with sex.
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("Sex"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$Sex)
+                          table(df.factors[,this_factor], df.factors$Sex)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -310,7 +322,7 @@ We computed metadata factors that were statistically associated with age.
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("AgeGreater60"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$AgeGreater60)
+                          table(df.factors[,this_factor], df.factors$AgeGreater60)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -357,7 +369,7 @@ We computed metadata factors that were statistically associated with VAD Indicat
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("VAD Indication"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$`VAD Indication`)
+                          table(df.factors[,this_factor], df.factors$`VAD Indication`)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -405,7 +417,7 @@ We computed metadata factors that were statistically associated with RVAD.
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("RVAD"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$RVAD)
+                          table(df.factors[,this_factor], df.factors$RVAD)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -453,7 +465,7 @@ We computed metadata factors that were statistically associated with Device Type
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[!(names(isfactor) %in% c("Device Type"))], 
                       function(this_factor){
-                          table(df[,this_factor], df$`Device Type`)
+                          table(df.factors[,this_factor], df.factors$`Device Type`)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -493,20 +505,21 @@ qtable %>%
 ```
 
 
-## Visualization of metadata dependencies
+## Visualization of metadata associations
 
 We used the `GGally` package to visualize pairwise dependencies between sample groups, separating out survivors and non-survivors (indicated by color).
 
-```{r ggpairs, fig.height=10, message=FALSE}
-df.temp <- df
+```{r ggpairs, fig.height=10, message=FALSE, warning=FALSE}
+df.temp <- df.factors
 colnames(df.temp) <- make.names(colnames(df), unique = T)
 #invisible(
 suppressWarnings(
     suppressMessages(
-        ggpairs(df.temp, 
-                mapping = aes(color = Survival), 
-                columns = colnames(df.temp)[c(2,4,6,7,8,9,10,11)]) 
-    ))
+        suppressWarnings(ggpairs(df.temp, 
+                #mapping = aes(color = Survival), 
+                columns = colnames(df.temp)[c(3,5,6,7,8,9,10,11,12,13)]) +
+            ggplot2::theme_grey(base_size = 7)
+    )))
 #)
 ```
 
@@ -522,15 +535,15 @@ Using Principal Component Analysis (PCA), we saw large variability between devic
 suppressMessages(require(ggbiplot, quietly = T))
 require(ggsci, quietly = T)
 
-isna <- unique(unlist(apply(df[,14:42], 2, function(x) which(is.na(x)))))
-pca <- prcomp(double_standardize(df[-isna, 14:42]), center = TRUE, scale. = TRUE)
+isna <- unique(unlist(apply(df[,c(bcellcyto)], 2, function(x) which(is.na(x)))))
+pca <- prcomp(double_standardize(df[-isna, c(bcellcyto)]), center = TRUE, scale. = TRUE)
 
 colorfun <- function(grouping, ...){
     if(nlevels(factor(grouping)) > 10) scale_color_discrete(...)
     if(nlevels(factor(grouping)) <=10) scale_color_d3(...)
 } 
 
-plotvars <- names(df)[c(10,1:9,11:17)]
+plotvars <- names(df)[c(11,1:13)]
 plots.pca <- mclapply(plotvars, function(this_var){
     this_groups <- df[-isna, this_var]
     if(is.numeric(this_groups)) this_groups <- cut(this_groups, 4)
@@ -559,13 +572,13 @@ for(ii in 1:length(plots.pca)){
 
 ## Fisher's exact test {.tabset .tabset-fade .tabset-pills}
 
-We analyzed the dependency of device types on the other discrete variables using Fisher's exact test. We found several dependencies (Benjamini-Hochberg $q<0.05$), which we have shown below.
+We analyzed the dependency of device types on the other discrete variables using Fisher's exact test. 
 
 ```{r Fisher_test_device, results="asis"}
 isfactor <- which(sapply(df, is.factor))[-1]
 contingency <- lapply(isfactor[names(isfactor) != "Device Type"], 
                       function(this_factor){
-                          table(df[,this_factor], df$`Device Type`)
+                          table(df.factors[,this_factor], df.factors$`Device Type`)
                       })
 
 fisher.p <- sapply(contingency, function(this_table){
@@ -573,7 +586,7 @@ fisher.p <- sapply(contingency, function(this_table){
 })
 fisher.q <- p.adjust(fisher.p, method = "BH")
 
-signif.ix <- which(fisher.q < 0.05)
+signif.ix <- which(fisher.p < 0.05)
 signif.order <- sort(fisher.q[signif.ix], index.return = T)$ix
 for(this_ix in signif.ix[signif.order]){
     cat("  \n###", names(contingency)[this_ix], "\n")
@@ -593,7 +606,7 @@ for(this_ix in signif.ix[signif.order]){
 
 ## One-way repeated measures anova {.tabset .tabset-fade .tabset-pills}
 
-We attempted to analyze the differences in B-cell levels across device types using a linear mixed effect model. Here we report variables that had a statistically significant variance (Benjamini-Hochberg $q<0.05$) across devices, time, or their interaction. 
+We first analyzed the differences in B-cell levels across device types using a one-way repeated measures anova. Here we report any variables that had a statistically significant variance ($p<0.05$) across devices, time, or their interaction. 
 
 ```{r device_means, eval = T}
 suppressMessages(require(lmerTest, quietly = T))
@@ -602,7 +615,7 @@ suppressMessages(require(car, quietly = TRUE))
 df.device <- df
 colnames(df.device) <- make.names(colnames(df), unique = T)
 
-varnames <- colnames(df.device)[14:42]
+varnames <- colnames(df.device)[c(bcellcyto)]
 models.device <- mclapply(varnames, function(this_var){
     this_formula <- as.formula(paste0(this_var, " ~ Device.Type + (1|PatientID)"))
     invisible(suppressMessages(this_model <- lmer(this_formula, data = df.device)))
@@ -611,14 +624,14 @@ models.device <- mclapply(varnames, function(this_var){
     return(list(model = this_model,
                 pvals = pvals))
 }, mc.cores = detectCores()-1)
-names(models.device) <- colnames(df)[14:42]
+names(models.device) <- colnames(df)[c(bcellcyto)]
 
 pvals <- do.call(rbind, lapply(models.device, function(x) x$pvals))
-rownames(pvals) <- colnames(df)[14:42]
+rownames(pvals) <- colnames(df)[c(bcellcyto)]
 colnames(pvals) <- c("pvalue")
 
 qBH <- matrix(p.adjust(pvals, method = "BH"), nrow = nrow(pvals))
-rownames(qBH) <- colnames(df)[14:42]
+rownames(qBH) <- colnames(df)[c(bcellcyto)]
 colnames(qBH) <- c("qvalue")
 
 sigvars <- apply(apply(pvals, 2, function(x) x<=0.05), 1, function(x) sum(x) > 0)
@@ -643,7 +656,7 @@ qtable %>%
 
 
 
-We plotted the average across time for each of the B-cells that showed a statistically significant effect across devices in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the fit. Note that the reference level for the devices is the HeartMate-II (HMII).
+We plotted mean levels across time for each of the B-cells that showed a statistically significant effect across devices in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the fit. Note that the reference level for the devices is the HeartMate-II (HMII).
 
 ```{r plot1, eval = T, results="asis"}
 require(reshape2, quietly = T)
@@ -679,10 +692,11 @@ names(plots.ts) <- rownames(qtable)
 for(ii in c(1:length(plots.ts))){
     for(jj in 1:length(plots.ts[[ii]])){
         sumtable <- suppressMessages(summary(models.device[[rownames(qtable)[ii]]]$model))
-        sumtable <- sumtable$coefficients[-1, c(1:5)] # drop intercept
-        sigsum <- sumtable[sumtable[,5] <= 0.05, , drop = F]
+        sumtable <- as.data.frame(sumtable$coefficients)[-1, ,drop=F] # drop intercept
+        if(!("Pr(>|t|)" %in% colnames(sumtable))) next()
+        sigsum <- sumtable[sumtable[,"Pr(>|t|)"] <= 0.05, , drop = F]
         cat("  \n###", rownames(qtable)[ii], "\n")
-        print(kable(sigsum[order(sigsum[,5]),,drop=F], row.names = T) %>%
+        print(kable(sigsum[order(sigsum[,"Pr(>|t|)"]),,drop=F], row.names = T) %>%
                   kable_styling(bootstrap_options = c("striped", 
                                                       "hover", 
                                                       "condensed",
@@ -699,9 +713,9 @@ for(ii in c(1:length(plots.ts))){
 
 
 
-## Mixed-effect model {.tabset .tabset-fade .tabset-pills}
+## Linear mixed-effect model {.tabset .tabset-fade .tabset-pills}
 
-We attempted to analyze the differences in B-cell levels across device types using a linear mixed effect model. We used time as a continuous variable, and included the interaction term. Here we report variables that had a statistically significant variance (Benjamini-Hochberg $q<0.05$) across devices, time, or their interaction. 
+We next analyzed the differences in B-cell levels across device types using a linear mixed effect model with time as a continuous variable, and included the interaction term. Here we report variables that had a statistically significant variance (Benjamini-Hochberg $p<0.05$) across devices, time, or their interaction. 
 
 ```{r mixedeffect, eval = T}
 suppressMessages(require(lmerTest, quietly = T))
@@ -710,7 +724,7 @@ suppressMessages(require(car, quietly = TRUE))
 df.device <- df
 colnames(df.device) <- make.names(colnames(df), unique = T)
 
-varnames <- colnames(df.device)[14:42]
+varnames <- colnames(df.device)[bcellcyto]
 models.device <- mclapply(varnames, function(this_var){
     this_formula <- as.formula(paste0(this_var, " ~ Device.Type * Time + (1|PatientID)"))
     invisible(suppressMessages(this_model <- lmer(this_formula, data = df.device)))
@@ -719,17 +733,17 @@ models.device <- mclapply(varnames, function(this_var){
     return(list(model = this_model,
                 pvals = pvals))
 }, mc.cores = detectCores()-1)
-names(models.device) <- colnames(df)[14:42]
+names(models.device) <- colnames(df)[bcellcyto]
 
 pvals <- do.call(rbind, lapply(models.device, function(x) x$pvals))
 rownames(pvals) <- varnames
 colnames(pvals) <- c("Device", "Time", "Device:Time")
 
 qBH <- matrix(p.adjust(pvals, method = "BH"), nrow = nrow(pvals))
-rownames(qBH) <- colnames(df)[14:42]
+rownames(qBH) <- colnames(df)[bcellcyto]
 colnames(qBH) <- colnames(pvals)
 
-sigvars <- apply(apply(qBH, 2, function(x) x<=0.05), 1, function(x) sum(x) > 0)
+sigvars <- apply(apply(pvals, 2, function(x) x<=0.05), 1, function(x) sum(x) > 0)
 sig.qtable <- qBH[sigvars,][order(apply(qBH[sigvars,], 1, min)),]
 
 qtable <- as.data.frame(signif(sig.qtable, 2))
@@ -751,7 +765,7 @@ qtable %>%
 
 
 
-We plotted the average across time for each of the B-cells that showed a statistically significant effect across devices in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit. Note that the reference level for the devices is the HeartMate-II (HMII).
+We plotted mean levels across time for each of the B-cells that showed a statistically significant effect across devices in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit. Note that the reference level for the devices is the HeartMate-II (HMII).
 
 ```{r plot2, eval = T, results="asis"}
 require(reshape2, quietly = T)
@@ -787,10 +801,11 @@ names(plots.ts) <- rownames(qtable)
 for(ii in c(1:length(plots.ts))){
     for(jj in 1:length(plots.ts[[ii]])){
         sumtable <- suppressMessages(summary(models.device[[rownames(qtable)[ii]]]$model))
-        sumtable <- sumtable$coefficients[-1, c(1:5)] # drop intercept
-        sigsum <- sumtable[sumtable[,5] <= 0.05, , drop = F]
+        sumtable <- as.data.frame(sumtable$coefficients)[-1, ,drop=F] # drop intercept
+        if(!("Pr(>|t|)" %in% colnames(sumtable))) next()
+        sigsum <- sumtable[sumtable[,"Pr(>|t|)"] <= 0.05, , drop = F]
         cat("  \n###", rownames(qtable)[ii], "\n")
-        print(kable(sigsum[order(sigsum[,5]),,drop=F], row.names = T) %>%
+        print(kable(sigsum[order(sigsum[,"Pr(>|t|)"]),,drop=F], row.names = T) %>%
                   kable_styling(bootstrap_options = c("striped", 
                                                       "hover", 
                                                       "condensed",
@@ -811,7 +826,7 @@ for(ii in c(1:length(plots.ts))){
 
 ## Two-way repeated measures anova {.tabset .tabset-fade .tabset-pills}
 
-We attempted to analyze the differences in B-cell levels across device types using a mixed effect model (a.k.a. two-way repeated measures ANOVA). Here we report variables that had a statistically significant variance (Benjamini-Hochberg $q<0.05$) across devices, times, or their interaction. As there were 5 device types and 7 timepoints, but only `r nrow(df) - length(Reduce(intersect, apply(df[,14:42], 2, function(x) which(is.na(x)))))` samples, this model is severely underpowered. The posterior belief in any of these results should therefore be quite small (as a consequence of Bayes rule).
+Finally, we attempted to analyze the differences in B-cell levels across device types using a two-way repeated measures ANOVA. Here we report variables that had a statistically significant variance ($p<0.05$) across devices, times, or their interaction. As there were 5 device types and 7 timepoints, but only `r nrow(df) - length(Reduce(intersect, apply(df[,bcellcyto], 2, function(x) which(is.na(x)))))` samples, this model is severely underpowered. The posterior belief in any of these results should therefore be quite small (as a consequence of Bayes rule).
 
 ```{r twowayanova, eval = T}
 suppressMessages(require(lmerTest, quietly = T))
@@ -820,7 +835,7 @@ suppressMessages(require(car, quietly = TRUE))
 df.device <- df
 colnames(df.device) <- make.names(colnames(df), unique = T)
 
-varnames <- colnames(df.device)[14:42]
+varnames <- colnames(df.device)[bcellcyto]
 models.device <- mclapply(varnames, function(this_var){
     this_formula <- as.formula(paste0(this_var, " ~ Device.Type * factor(Time) + (1|PatientID)"))
     invisible(suppressMessages(this_model <- lmer(this_formula, data = df.device)))
@@ -829,17 +844,17 @@ models.device <- mclapply(varnames, function(this_var){
     return(list(model = this_model,
                 pvals = pvals))
 }, mc.cores = detectCores()-1)
-names(models.device) <- colnames(df)[14:42]
+names(models.device) <- colnames(df)[bcellcyto]
 
 pvals <- do.call(rbind, lapply(models.device, function(x) x$pvals))
 rownames(pvals) <- varnames
 colnames(pvals) <- c("Device", "factor(Time)", "Device:factor(Time)")
 
 qBH <- matrix(p.adjust(pvals, method = "BH"), nrow = nrow(pvals))
-rownames(qBH) <- colnames(df)[14:42]
+rownames(qBH) <- colnames(df)[bcellcyto]
 colnames(qBH) <- colnames(pvals)
 
-sigvars <- apply(apply(qBH, 2, function(x) x<=0.05), 1, function(x) sum(x) > 0)
+sigvars <- apply(apply(pvals, 2, function(x) x<=0.05), 1, function(x) sum(x) > 0)
 sig.qtable <- qBH[sigvars,][order(apply(qBH[sigvars,], 1, min)),]
 
 qtable <- as.data.frame(signif(sig.qtable, 2))
@@ -860,7 +875,7 @@ qtable %>%
 ```
 
 
-We plotted the average across time for each of the B-cells that showed a statistically significant effect across devices in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit. Note that the reference level for the time comparisons is timepoint 0, and the reference level for the devices is the HeartMate-II (HMII).
+We plotted mean levels across time for each of the B-cells that showed a statistically significant effect across devices in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit. Note that the reference level for the time comparisons is timepoint 0, and the reference level for the devices is the HeartMate-II (HMII).
 
 ```{r plot3, eval = T, results="asis"}
 require(reshape2, quietly = T)
@@ -896,10 +911,11 @@ names(plots.ts) <- rownames(qtable)
 for(ii in c(1:length(plots.ts))){
     for(jj in 1:length(plots.ts[[ii]])){
         sumtable <- suppressMessages(summary(models.device[[rownames(qtable)[ii]]]$model))
-        sumtable <- sumtable$coefficients[-1, c(4:5)] # drop intercept
-        sigsum <- sumtable[sumtable[,2] <= 0.05, , drop = F]
+        sumtable <- as.data.frame(sumtable$coefficients)[-1, ,drop=F] # drop intercept
+        if(!("Pr(>|t|)" %in% colnames(sumtable))) next()
+        sigsum <- sumtable[sumtable[,"Pr(>|t|)"] <= 0.05, , drop = F]
         cat("  \n###", rownames(qtable)[ii], "\n")
-        print(kable(sigsum[order(sigsum[,2]),], row.names = T) %>%
+        print(kable(sigsum[order(sigsum[,"Pr(>|t|)"]),], row.names = T) %>%
                   kable_styling(bootstrap_options = c("striped", 
                                                       "hover", 
                                                       "condensed",
@@ -981,15 +997,15 @@ double_standardize <- function(x, niter = 100) {
     return(as.data.frame(x))
 }
 
-isna <- unique(unlist(apply(df.HMII[,14:42], 2, function(x) which(is.na(x)))))
-pca <- prcomp(double_standardize(df.HMII[-isna, 14:42]), center = TRUE, scale. = TRUE)
+isna <- unique(unlist(apply(df.HMII[,bcellcyto], 2, function(x) which(is.na(x)))))
+pca <- prcomp(double_standardize(df.HMII[-isna, bcellcyto]), center = TRUE, scale. = TRUE)
 
 colorfun <- function(grouping, ...){
     if(nlevels(factor(grouping)) > 10) scale_color_discrete(...)
     if(nlevels(factor(grouping)) <=10) scale_color_d3(...)
 } 
 
-plots.pca <- mclapply(names(df.HMII)[1:17], function(this_var){
+plots.pca <- mclapply(names(df.HMII)[1:13], function(this_var){
     this_groups <- df.HMII[-isna, this_var]
     if(is.numeric(this_groups)) this_groups <- cut(this_groups, 4)
     
@@ -1003,7 +1019,7 @@ plots.pca <- mclapply(names(df.HMII)[1:17], function(this_var){
         theme_classic() 
 }, mc.cores = detectCores()-1)
 
-names(plots.pca) <- names(df.HMII)[1:17]
+names(plots.pca) <- names(df.HMII)[1:13]
 #plots.pca$PatientID
 #plots.pca$`Device Type`
 
@@ -1015,12 +1031,11 @@ for(ii in 1:length(plots.pca)){
 ```
 
 
+## One-way repeated measures anova {.tabset .tabset-fade .tabset-pills}
 
-## Two-way repeated measures anova {.tabset .tabset-fade .tabset-pills}
+We analyzed the differences in B-cell levels for various features using a one-way repeated measures anova. Here we report variables that had a statistically significant variance ($p<0.05$) across groups, or groups at each timepoint. 
 
-We attempted to analyze the differences in B-cell levels for various features using a mixed effect model (a.k.a. two-way repeated measures ANOVA). Here we report variables that had a statistically significant variance (Benjamini-Hochberg $q<0.05$) across groups, or groups at each timepoint. 
-
-```{r bcell_models, eval = T}
+```{r bcell_models_oneway, eval = T}
 suppressMessages(require(lmerTest, quietly = TRUE))
 suppressMessages(require(car, quietly = TRUE))
 require(reshape2, quietly = TRUE)
@@ -1028,16 +1043,16 @@ require(reshape2, quietly = TRUE)
 df.lmer <- df.HMII
 names(df.lmer) <- make.names(names(df.lmer), unique = TRUE)
 
-groupvars.ix <- c(3,4,5,7,8,9,11)
+groupvars.ix <- c(4,5,6,8,9,10,12,13)
 groupvars <- names(df.lmer)[groupvars.ix]
 
-bcells.ix <- c(14:42)
+bcells.ix <- c(bcellcyto)
 bcells <- names(df.lmer)[bcells.ix]
 
 models.b <- mclapply(groupvars, function(this_groupvar){
     models.bcells <- lapply(bcells, function(this_bcell){
         this_formula <- as.formula(paste0(this_bcell, " ~ ", this_groupvar, 
-                                          " * factor(Time) + (1|PatientID)"))
+                                          " + (1|PatientID)"))
         suppressMessages(suppressWarnings(this_model <- lmer(this_formula, data = droplevels(df.lmer))))
         this_anova <- Anova(this_model, type = 2)
         this_pvalues <- this_anova$`Pr(>Chisq)`
@@ -1046,7 +1061,7 @@ models.b <- mclapply(groupvars, function(this_groupvar){
         return(list(model = this_model,
                     pvals = this_pvalues))
     })
-    names(models.bcells) <- colnames(df)[14:42]
+    names(models.bcells) <- colnames(df)[bcellcyto]
     pvalues <- do.call(rbind, lapply(models.bcells, function(x) x$pvals))
     rownames(pvalues) <- bcells
     #return(pvalues)
@@ -1057,7 +1072,8 @@ names(models.b) <- groupvars
 pvals <- lapply(models.b, function(x) x$pvals)
 # something wrong here
 names(pvals) <- groupvars
-pvals.matrix <- do.call(cbind, lapply(pvals, function(this_pval) this_pval[,c(1,3)]))
+pvals.matrix <- do.call(cbind, lapply(pvals, function(this_pval) this_pval[,c(1)]))
+
 
 
 # Benjamini Hochberg
@@ -1081,10 +1097,130 @@ qvals.matrix <- matrix(fdrobj$q, nrow = nrow(pvals.matrix), ncol = ncol(pvals.ma
 rownames(qvals.matrix) <- rownames(pvals.matrix)
 colnames(qvals.matrix) <- colnames(pvals.matrix)
 rownames(qvals.matrix) <- names(df)[bcells.ix]
+
+pvals.df <- melt(pvals.matrix)
 qvals.df <- melt(qvals.matrix)
-colnames(qvals.df) <- c("B-cell", "parameter", "qvalue")
-qvals.df.ranked <- qvals.df[order(qvals.df$qvalue, decreasing = F),]
-shortlist <- qvals.df.ranked[qvals.df.ranked$qvalue <= 0.3,]
+colnames(qvals.df) <- colnames(pvals.df) <- c("B-cell", "parameter", "qvalue")
+qvals.df.short <- qvals.df[pvals.df$qvalue <= 0.05,]
+shortlist <- qvals.df.short[order(qvals.df.short$qvalue),]
+
+
+
+kable(shortlist, 
+      digits = 3,
+      row.names = T,
+      caption = "Significant results") %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%")
+```
+
+
+We plotted the average across time for each of the B-cells that showed a statistically significant effect across various factors in the above one-way anova. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit.
+
+```{r plot4_oneway, eval = T, results='asis'}
+require(stringr, quietly = T)
+siggroups <- sapply(str_split(shortlist$parameter, ":"), function(x) x[1])
+for(ii in 1:nrow(shortlist)){
+    this_group <-siggroups[ii]
+    this_bcell <- as.character(shortlist$`B-cell`[ii])
+    cat("  \n###", as.character(shortlist$`B-cell`[ii]), "\n")
+    
+    sumtable <- suppressMessages(summary(models.b[[this_group]]$model[[this_bcell]]$model))
+    sumtable <- as.data.frame(sumtable$coefficients)[-1, ,drop=F] # drop intercept
+    if(!("Pr(>|t|)" %in% colnames(sumtable))) next()
+    sigsum <- sumtable[sumtable[,"Pr(>|t|)"] <= 0.05, , drop = F]
+    
+    print(kable(sigsum[order(sigsum[,"Pr(>|t|)"]),,drop=F], row.names = T) %>%
+              kable_styling(bootstrap_options = c("striped", 
+                                                  "hover", 
+                                                  "condensed",
+                                                  "responsive"),
+                            font_size = 12)
+    )
+    cat("  \n")
+    
+    suppressWarnings(print(plots.ts[[shortlist$`B-cell`[ii]]][[which(groups == this_group)]]))
+    cat("  \n")
+}
+
+```
+
+
+
+## Linear mixed-effect model {.tabset .tabset-fade .tabset-pills}
+
+We analyzed the differences in B-cell levels for various features using a linear mixed effect model, with time as a continuous variable. Here we report variables that had a statistically significant variance ($p<0.05$) across groups, or groups at each timepoint. 
+
+```{r bcell_models_lme, eval = T}
+suppressMessages(require(lmerTest, quietly = TRUE))
+suppressMessages(require(car, quietly = TRUE))
+require(reshape2, quietly = TRUE)
+
+df.lmer <- df.HMII
+names(df.lmer) <- make.names(names(df.lmer), unique = TRUE)
+
+groupvars.ix <- c(4,5,6,8,9,10,12,13)
+groupvars <- names(df.lmer)[groupvars.ix]
+
+bcells.ix <- c(bcellcyto)
+bcells <- names(df.lmer)[bcells.ix]
+
+models.b <- mclapply(groupvars, function(this_groupvar){
+    models.bcells <- lapply(bcells, function(this_bcell){
+        this_formula <- as.formula(paste0(this_bcell, " ~ ", this_groupvar, 
+                                          " * Time + (1|PatientID)"))
+        suppressMessages(suppressWarnings(this_model <- lmer(this_formula, data = droplevels(df.lmer))))
+        this_anova <- Anova(this_model, type = 2)
+        this_pvalues <- this_anova$`Pr(>Chisq)`
+        names(this_pvalues) <- rownames(this_anova)
+        #return(this_pvalues)
+        return(list(model = this_model,
+                    pvals = this_pvalues))
+    })
+    names(models.bcells) <- colnames(df)[bcellcyto]
+    pvalues <- do.call(rbind, lapply(models.bcells, function(x) x$pvals))
+    rownames(pvalues) <- bcells
+    #return(pvalues)
+    return(list(model = models.bcells,
+                pvals = pvalues))
+}, mc.cores = detectCores()-1)
+names(models.b) <- groupvars
+pvals <- lapply(models.b, function(x) x$pvals)
+# something wrong here
+names(pvals) <- groupvars
+pvals.matrix <- do.call(cbind, lapply(pvals, function(this_pval) this_pval[,c(1,3)]))
+
+
+
+# Benjamini Hochberg
+# qBH <- matrix(p.adjust(as.numeric(pvals.matrix), 
+#                        method = "BH"), 
+#               nrow = nrow(pvals.matrix), 
+#               ncol = ncol(pvals.matrix), 
+#               byrow = F) 
+# rownames(qBH) <- rownames(pvals.matrix)
+# colnames(qBH) <- colnames(pvals.matrix)
+# rownames(qBH) <- names(df)[bcells.ix]
+# qvalsBH.df <- melt(qBH)
+# colnames(qvalsBH.df) <- c("B-cell", "parameter", "qvalue")
+# qvalsBH.df.ranked <- qvalsBH.df[order(qvalsBH.df$qvalue, decreasing = F),]
+# qvalsBH.df.ranked[qvalsBH.df.ranked$qvalue <= 0.3,]
+
+# Local FDR
+require(fdrtool, quietly = T)
+invisible(suppressMessages(fdrobj <- fdrtool(as.numeric(pvals.matrix), statistic = "pvalue", plot = F, verbose = F)))
+qvals.matrix <- matrix(fdrobj$q, nrow = nrow(pvals.matrix), ncol = ncol(pvals.matrix), byrow = F)
+rownames(qvals.matrix) <- rownames(pvals.matrix)
+colnames(qvals.matrix) <- colnames(pvals.matrix)
+rownames(qvals.matrix) <- names(df)[bcells.ix]
+
+pvals.df <- melt(pvals.matrix)
+qvals.df <- melt(qvals.matrix)
+colnames(qvals.df) <- colnames(pvals.df) <- c("B-cell", "parameter", "qvalue")
+qvals.df.short <- qvals.df[pvals.df$qvalue <= 0.05,]
+shortlist <- qvals.df.short[order(qvals.df.short$qvalue),]
+
 
 
 kable(shortlist, 
@@ -1099,7 +1235,7 @@ kable(shortlist,
 
 We plotted the average across time for each of the B-cells that showed a statistically significant effect across various factors in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit.
 
-```{r plot4, eval = T, results='asis'}
+```{r plot4_lme, eval = T, results='asis'}
 require(stringr, quietly = T)
 siggroups <- sapply(str_split(shortlist$parameter, ":"), function(x) x[1])
 for(ii in 1:nrow(shortlist)){
@@ -1108,10 +1244,127 @@ for(ii in 1:nrow(shortlist)){
     cat("  \n###", as.character(shortlist$`B-cell`[ii]), "\n")
     
     sumtable <- suppressMessages(summary(models.b[[this_group]]$model[[this_bcell]]$model))
-    sumtable <- sumtable$coefficients[-1, c(1:5)] # drop intercept
-    sigsum <- sumtable[sumtable[,5] <= 0.05, , drop = F]
+    sumtable <- as.data.frame(sumtable$coefficients)[-1, ,drop=F] # drop intercept
+    if(!("Pr(>|t|)" %in% colnames(sumtable))) next()
+    sigsum <- sumtable[sumtable[,"Pr(>|t|)"] <= 0.05, , drop = F]
     
-    print(kable(sigsum[order(sigsum[,5]),,drop=F], row.names = T) %>%
+    print(kable(sigsum[order(sigsum[,"Pr(>|t|)"]),,drop=F], row.names = T) %>%
+              kable_styling(bootstrap_options = c("striped", 
+                                                  "hover", 
+                                                  "condensed",
+                                                  "responsive"),
+                            font_size = 12)
+    )
+    cat("  \n")
+    
+    suppressWarnings(print(plots.ts[[shortlist$`B-cell`[ii]]][[which(groups == this_group)]]))
+    cat("  \n")
+}
+
+```
+
+
+## Two-way repeated measures anova {.tabset .tabset-fade .tabset-pills}
+
+We analyzed the differences in B-cell levels for various features using a two-way repeated measures ANOVA. Here we report variables that had a statistically significant variance ($p<0.05$) across groups, or groups at each timepoint. 
+
+```{r bcell_models_twoway, eval = T}
+suppressMessages(require(lmerTest, quietly = TRUE))
+suppressMessages(require(car, quietly = TRUE))
+require(reshape2, quietly = TRUE)
+
+df.lmer <- df.HMII
+names(df.lmer) <- make.names(names(df.lmer), unique = TRUE)
+
+groupvars.ix <- c(4,5,6,8,9,10,12,13)
+groupvars <- names(df.lmer)[groupvars.ix]
+
+bcells.ix <- c(bcellcyto)
+bcells <- names(df.lmer)[bcells.ix]
+
+models.b <- mclapply(groupvars, function(this_groupvar){
+    models.bcells <- lapply(bcells, function(this_bcell){
+        this_formula <- as.formula(paste0(this_bcell, " ~ ", this_groupvar, 
+                                          " * factor(Time) + (1|PatientID)"))
+        suppressMessages(suppressWarnings(this_model <- lmer(this_formula, data = droplevels(df.lmer))))
+        this_anova <- Anova(this_model, type = 2)
+        this_pvalues <- this_anova$`Pr(>Chisq)`
+        names(this_pvalues) <- rownames(this_anova)
+        #return(this_pvalues)
+        return(list(model = this_model,
+                    pvals = this_pvalues))
+    })
+    names(models.bcells) <- colnames(df)[bcellcyto]
+    pvalues <- do.call(rbind, lapply(models.bcells, function(x) x$pvals))
+    rownames(pvalues) <- bcells
+    #return(pvalues)
+    return(list(model = models.bcells,
+                pvals = pvalues))
+}, mc.cores = detectCores()-1)
+names(models.b) <- groupvars
+pvals <- lapply(models.b, function(x) x$pvals)
+# something wrong here
+names(pvals) <- groupvars
+pvals.matrix <- do.call(cbind, lapply(pvals, function(this_pval) this_pval[,c(1,3)]))
+
+
+
+# Benjamini Hochberg
+# qBH <- matrix(p.adjust(as.numeric(pvals.matrix), 
+#                        method = "BH"), 
+#               nrow = nrow(pvals.matrix), 
+#               ncol = ncol(pvals.matrix), 
+#               byrow = F) 
+# rownames(qBH) <- rownames(pvals.matrix)
+# colnames(qBH) <- colnames(pvals.matrix)
+# rownames(qBH) <- names(df)[bcells.ix]
+# qvalsBH.df <- melt(qBH)
+# colnames(qvalsBH.df) <- c("B-cell", "parameter", "qvalue")
+# qvalsBH.df.ranked <- qvalsBH.df[order(qvalsBH.df$qvalue, decreasing = F),]
+# qvalsBH.df.ranked[qvalsBH.df.ranked$qvalue <= 0.3,]
+
+# Local FDR
+require(fdrtool, quietly = T)
+invisible(suppressMessages(fdrobj <- fdrtool(as.numeric(pvals.matrix), statistic = "pvalue", plot = F, verbose = F)))
+qvals.matrix <- matrix(fdrobj$q, nrow = nrow(pvals.matrix), ncol = ncol(pvals.matrix), byrow = F)
+rownames(qvals.matrix) <- rownames(pvals.matrix)
+colnames(qvals.matrix) <- colnames(pvals.matrix)
+rownames(qvals.matrix) <- names(df)[bcells.ix]
+
+pvals.df <- melt(pvals.matrix)
+qvals.df <- melt(qvals.matrix)
+colnames(qvals.df) <- colnames(pvals.df) <- c("B-cell", "parameter", "qvalue")
+qvals.df.short <- qvals.df[pvals.df$qvalue <= 0.05,]
+shortlist <- qvals.df.short[order(qvals.df.short$qvalue),]
+
+
+
+kable(shortlist, 
+      digits = 3,
+      row.names = T,
+      caption = "Significant results") %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%")
+```
+
+
+We plotted the average across time for each of the B-cells that showed a statistically significant effect across various factors in the above mixed effect models. We drew attention to specific features that induced the positive test result, by listing the model parameters with $p<0.05$ in the multivariate fit.
+
+```{r plot4_twoway, eval = T, results='asis'}
+require(stringr, quietly = T)
+siggroups <- sapply(str_split(shortlist$parameter, ":"), function(x) x[1])
+for(ii in 1:nrow(shortlist)){
+    this_group <-siggroups[ii]
+    this_bcell <- as.character(shortlist$`B-cell`[ii])
+    cat("  \n###", as.character(shortlist$`B-cell`[ii]), "\n")
+    
+    sumtable <- suppressMessages(summary(models.b[[this_group]]$model[[this_bcell]]$model))
+    sumtable <- as.data.frame(sumtable$coefficients)[-1, ,drop=F] # drop intercept
+    if(!("Pr(>|t|)" %in% colnames(sumtable))) next()
+    sigsum <- sumtable[sumtable[,"Pr(>|t|)"] <= 0.05, , drop = F]
+    
+    print(kable(sigsum[order(sigsum[,"Pr(>|t|)"]),,drop=F], row.names = T) %>%
               kable_styling(bootstrap_options = c("striped", 
                                                   "hover", 
                                                   "condensed",
