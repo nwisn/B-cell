@@ -1,6 +1,6 @@
 ---
-title: "Analysis of B-cell markers in MCS device patients"
-subtitle: "Statistical Workbook"
+title: "Statistical analysis of B-cell and cytokine markers in MCS device patients"
+subtitle: ""
 author: "Nicholas Wisniewski"
 date: June 28, 2018
 output:
