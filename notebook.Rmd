@@ -1,6 +1,5 @@
 ---
-title: "Analysis of immune biomarkers in MCS device implantation"
-subtitle: "B-cells and cytokines"
+title: "Analysis of immune biomarkers after MCS device implantation"
 author: "Nicholas Wisniewski"
 date: June 28, 2018
 output:
@@ -21,6 +20,15 @@ df$`Device Type` <- relevel(df$`Device Type`, ref = "HMII")
 bc <- 14:42
 cyt <- 43:80
 bcellcyto <- c(bc,cyt)
+groups <- make.names(c("AgeGreater60", 
+                       "Sex",
+                       "LowIntermacs",
+                       "RVAD", 
+                       "Sensitized",
+                       "VAD Indication", 
+                       #"Device Type", 
+                       "Survival",
+                       "Outcome"))
 
 
 suppressMessages(require(knitr, quietly = T))
@@ -32,10 +40,12 @@ suppressMessages(require(parallel, quietly = TRUE))
 suppressMessages(require(ggsci, quietly = TRUE))
 suppressMessages(require(ggplot2, quietly = T))
 suppressMessages(require(GGally, quietly = T))
+suppressMessages(require(reshape2, quietly = T))
+suppressMessages(require(stringr, quietly = T))
 capture.output(invisible(suppressMessages(require(WGCNA, quietly = T))))
 
 # Efron's double standardization
-double_standardize <- function(x, niter = 100) {
+double_standardize <- function(x, niter = 1000) {
     for(i in 1:niter) x <- t(scale(t(scale(x))))
     return(as.data.frame(x))
 }
@@ -491,19 +501,19 @@ suppressWarnings(
 
 ## Identification of clusters
 
-We double-standardized ( [Efron 2009](https://projecteuclid.org/euclid.aoas/1254773272)) the data and biclustered it using the Euclidean distance. 
+We double-standardized ( [Efron 2009](https://projecteuclid.org/euclid.aoas/1254773272)) the data and computed the correlation matrix for the biomarkers using all pairwise complete data. We then clustered the biomarkers using those correlations, and clustered the samples that remained after removing missing data. 
 
 ```{r sample_correlation_heatmap, message=F, fig.height=10}
 require(pheatmap, quietly = T)
 require(RColorBrewer, quietly = T)
 
 
-colorfun <- function(nlevels, ...){
+colorfun <- function(nlevels, func = pal_d3, ...){
     if(nlevels > 10) return(standardColors(nlevels))
-    if(nlevels <=10) return(pal_d3(...)(nlevels))
+    if(nlevels <=10) return(func(...)(nlevels))
 } 
 
-annotation.row <- data.frame("Molecule" = factor(c("none", rep("B-cell",29), rep("cytokine",38))))
+annotation.row <- data.frame("biomarker" = factor(c(rep("B-cell",29), rep("cytokine",38))))
 annotation.col <- df.raw[,c(1,4,5,6,7,8,9,10,11,12,13)]
 annotation.colors <- lapply(colnames(annotation.col), function(nam){
     colrs <- colorfun(nlevels(annotation.col[[nam]]))
@@ -511,20 +521,43 @@ annotation.colors <- lapply(colnames(annotation.col), function(nam){
     return(colrs)
 })
 names(annotation.colors) <- colnames(annotation.col)
-annotation.colors[["Molecule"]] <- colorfun(nlevels(annotation.row$Molecule))
-names(annotation.colors[["Molecule"]]) <- levels(annotation.row$Molecule)
+annotation.colors[["biomarker"]] <- colorfun(nlevels(annotation.row$biomarker))
+names(annotation.colors[["biomarker"]]) <- levels(annotation.row$biomarker)
 
-df.patient <- double_standardize(t(na.omit(df.raw[,c(3,bcellcyto)])))
+df.raw.ds <- df.raw
+df.raw.ds[,bcellcyto] <- double_standardize(df.raw[,c(bcellcyto)])
+df.patient <- t(na.omit(double_standardize((df.raw[,bcellcyto]))))
 rownames(annotation.row) <- rownames(df.patient)
+
+r.biomarker <- cor(df.raw.ds[,bcellcyto], use = "p")
+tree <- hclust(as.dist((1-r.biomarker)/2), method = "ward.D2")
+#pheatmap(t(df.raw.ds[,bcellcyto]), cluster_rows=tree, cutree_rows = 7, border_color = NA, cluster_cols = F)
+p1 <- pheatmap(df.patient, clustering_method = "ward.D2", cluster_rows = tree, cutree_rows = 7, cutree_cols = 4, border_color = NA, silent = T)
+
+
+
+# original
+#p1 <- pheatmap(df.patient, clustering_method = "ward.D2", cutree.rows = 4, cutree_cols = 4, silent = TRUE)
+bicluster <- list()
+bicluster$biomarkers <- cutree(p1$tree_row, k=7)
+bicluster$samples <- cutree(p1$tree_col, k=4)
+annotation.row$cluster <- factor(bicluster$biomarkers)
+annotation.colors$cluster <- colorfun(nlevels(annotation.row$cluster), func = pal_simpsons)
+names(annotation.colors$cluster) <- levels(factor(annotation.row$cluster))
+bicluster$annotation.colors <- annotation.colors$cluster
+
 pheatmap(df.patient, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+         color = colorRampPalette(rev(brewer.pal(n = 10, name = "RdBu")))(100),
          breaks = c(seq(-max(abs(df.patient), na.rm=T), 0, length.out = 50), seq(0.001, max(abs(df.patient), na.rm=T), length.out = 50)),
          #scale = "row",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
          fontsize = 7,
-         cutree_rows = 4,
-         cutree_cols = 4,
+         cutree_rows = 7,
+         cutree_cols = 7,
          cluster_cols = T,
-         cluster_rows = T,
+         cluster_rows = tree,
+         show_colnames = F,
          annotation_col = annotation.col,
          annotation_row = annotation.row,
          annotation_colors = annotation.colors,
@@ -533,6 +566,206 @@ pheatmap(df.patient,
 ```
 
 
+## Clusters over time  {.tabset .tabset-fade .tabset-pills}
+
+```{r, warning=FALSE, message=FALSE}
+df.raw.ds.long <- melt(df.raw.ds, id.vars = colnames(df)[1:13])
+
+make_long_with_clusterID <- function(dataframe, form, cluster, func = function(x) mean(x, na.rm=T)){
+    colnames(dataframe) <- make.names(colnames(dataframe))
+    this_df <- aggregate(form, data = dataframe, FUN = func)
+    this_df$cluster <- cluster[match(this_df$variable, names(cluster))]
+    return(this_df)
+}
+
+stat_sum_df <- function(fun, geom="errorbar", ...) {
+    stat_summary(fun.data = fun, geom = geom, width = 1, ...)
+}
+
+this_formula <- as.formula(paste0("value~variable*Time"))
+this_df <- make_long_with_clusterID(df.raw.ds.long, 
+                                        this_formula,
+                                        bicluster$biomarkers)
+
+g <- ggplot(this_df) + 
+        aes(x=as.numeric(as.character(Time)), y=value, 
+            color = factor(cluster), fill = factor(cluster), group = variable) + 
+        #geom_point(alpha = 0.1, size = 1) + 
+        #geom_line(alpha = 0.2) +
+        xlab("Time (days)") +
+        ylab("Standardized level (z-score)") +
+        scale_x_continuous(breaks = unique(this_df$Time)) +
+        #ggtitle(this_factor) +
+        #stat_summary(fun.y = mean, aes(group = cluster), geom=c("line"), size = .02, position = position_dodge(.5)) +
+        stat_smooth(method = "loess", aes(group = cluster), span = .5, size = 1, alpha = 0.0) +
+        stat_summary(fun.y = mean, aes(group = cluster), geom=c("point"), position = position_dodge(.5)) +
+        stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes(group = cluster), position = position_dodge(.5)) + 
+        scale_color_jco(name = "Cluster") + scale_fill_jco(name = "Cluster") + 
+        theme_classic() 
+print(g)
+
+
+g2 <- ggplot(this_df) + 
+        aes(x=as.numeric(as.character(Time)), y=value, 
+            color = factor(cluster), fill = factor(cluster), group = variable) + 
+        #geom_point(alpha = 0.1, size = 1) + 
+        #geom_line(alpha = 0.2) +
+        xlab("Time (days)") +
+        ylab("Standardized level (z-score)") +
+        scale_x_continuous(breaks = unique(this_df$Time)) +
+        #ggtitle(this_factor) +
+        stat_summary(fun.y = mean, aes(group = cluster), geom=c("line"), size = .02, position = position_dodge(.5)) +
+        stat_smooth(method = "loess", aes(group = cluster), span = .5, size = 1, alpha = 0.1) +
+        stat_summary(fun.y = mean, aes(group = cluster), geom=c("point"), position = position_dodge(.5)) +
+        stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes(group = cluster), position = position_dodge(.5)) + 
+        scale_color_jco(name = "Cluster") + scale_fill_jco(name = "Cluster") + 
+        theme_classic() 
+print(g2)
+
+g3 <- ggplot(this_df) + 
+        aes(x=as.numeric(as.character(Time)), y=value, 
+            color = factor(cluster), fill = factor(cluster), group = variable) + 
+        geom_point(alpha = 0.1, size = 1) + 
+        geom_line(alpha = 0.2) +
+        xlab("Time (days)") +
+        ylab("Standardized level (z-score)") +
+        scale_x_continuous(breaks = unique(this_df$Time)) +
+        #ggtitle(this_factor) +
+        stat_summary(fun.y = mean, aes(group = cluster), geom=c("line"), size = .02, position = position_dodge(.5)) +
+        stat_smooth(method = "loess", aes(group = cluster), span = .5, size = 1, alpha = 0.1) +
+        stat_summary(fun.y = mean, aes(group = cluster), geom=c("point"), position = position_dodge(.5)) +
+        stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes(group = cluster), position = position_dodge(.5)) + 
+        scale_color_jco(name = "Cluster") + scale_fill_jco(name = "Cluster") + 
+        theme_classic() 
+print(g3)
+
+```
+
+
+We analyzed the difference between categories for each cluster, using a paired t-test at each timepoint to pick out interesting differences. We label the biomarkers for tests that have Benjamini-Hochberg $q<0.05$.
+
+
+```{r, results='asis', warning=F, message=F, fig.height=20}
+require(ggrepel, quietly = TRUE)
+
+presult <- list()
+for(this_factor in groups){
+    this_formula <- as.formula(paste0("value~variable*Time*", make.names(this_factor)))
+    this_df <- make_long_with_clusterID(df.raw.ds.long, 
+                                        this_formula,
+                                        bicluster$biomarkers)
+    this_df$name <- as.character(this_df$variable )
+    
+    # compute t-tests
+    presult[[this_factor]] <- lapply(split(this_df, this_df$cluster), function(x){
+        lapply(split(x, as.factor(x$Time)), function(y){
+            n <- table(y[[make.names(this_factor)]])
+            if(all(n > 1) & length(n)==2){
+                res <- t.test(as.formula(paste0("value ~ ", make.names(this_factor))), paired = TRUE, data = y)
+                t <- res$statistic
+                p <- res$p.value
+            } else {
+                t <- 0
+                p <- 1
+            }
+           return(p)
+        })  
+    }) 
+}
+
+#hist(unlist(presult))
+q <- p.adjust(unlist(presult), method = "BH")
+q_factor <- sapply(str_split(names(q), "[.]"), function(x) x[1])
+q_clusters <- sapply(str_split(names(q), "[.]"), function(x) x[2])
+q_time <- sapply(str_split(names(q), "[.]"), function(x) x[3])
+these_qvals <- data.frame(qval = q, factor = q_factor, cluster = q_clusters, Time = q_time)
+
+for(this_factor in groups){
+    this_formula <- as.formula(paste0("value~variable*Time*", make.names(this_factor)))
+    this_df <- make_long_with_clusterID(df.raw.ds.long,
+                                        this_formula,
+                                        bicluster$biomarkers)
+    this_df$name <- as.character(this_df$variable )
+    # 
+    # # compute t-tests
+    # presult <- lapply(split(this_df, this_df$cluster), function(x){
+    #     lapply(split(x, as.factor(x$Time)), function(y){
+    #         n <- table(y[[make.names(this_factor)]])
+    #         if(all(n > 1) & length(n)==2){
+    #             res <- t.test(as.formula(paste0("value ~ ", make.names(this_factor))), paired = TRUE, data = y)
+    #             t <- res$statistic
+    #             p <- res$p.value
+    #         } else {
+    #             t <- 0
+    #             p <- 1
+    #         }
+    #        return(p)
+    #     })  
+    # }) 
+    # 
+    # require(stringr, quietly = T)
+    # q <- p.adjust(unlist(presult), method = "BH")
+    # q_clusters <- sapply(str_split(names(q), "[.]"), function(x) x[1])
+    # q_time <- sapply(str_split(names(q), "[.]"), function(x) x[2])
+    # these_qvals <- data.frame(qval = q, cluster = q_clusters, Time = q_time)
+    
+    # label only significant differences
+    for(this_cluster in levels(factor(this_df$cluster))){
+        # this_pvals <- presult[[this_cluster]]
+        # this_qvals <- p.adjust(this_pvals, method = "bonferroni")
+        #pos <- this_qvals < 0.05
+        for(this_time in levels(factor(this_df$Time))){
+            this_qval <- these_qvals$qval[these_qvals$factor == this_factor & these_qvals$cluster == this_cluster & these_qvals$Time == this_time]
+            #this_qval <- these_qvals[[this_factor]]$qval[these_qvals$cluster == this_cluster & these_qvals$Time == this_time]
+            #ii <- which(names(this_qvals) == this_time)
+            if(length(this_qval) > 0){
+                if(this_qval < 0.05){
+                    this_df$name[this_df$cluster == this_cluster & this_df$Time == this_time & this_df[[this_factor]] == levels(this_df[[this_factor]])[1]] <- ""
+                } else {
+                    this_df$name[this_df$cluster == this_cluster & this_df$Time == this_time] <- ""
+                }
+            } else {
+                next()
+            }
+        }
+    }
+    
+    g <- ggplot(this_df) + 
+        aes(x=as.numeric(as.character(Time)), y=value, 
+            color = factor(cluster), fill = factor(cluster), label = name) + 
+        aes_string(group = paste("interaction(variable,", make.names(this_factor), ")"), lty = make.names(this_factor)) +
+        geom_point(alpha = 0.1, size = 1) + 
+        geom_line(alpha = 0.2) +
+        xlab("Time (days)") +
+        ylab("Standardized level (z-score)") +
+        scale_x_continuous(breaks = unique(this_df$Time)) +
+        ggtitle(this_factor) +
+        #stat_smooth(method = "loess", aes_string(group = make.names(this_factor)), span = .6, alpha = 0.3) +
+        stat_summary(fun.y = mean, aes_string(group = make.names(this_factor)), geom=c("line"), size = .02, position = position_dodge(.5)) +
+        stat_smooth(method = "loess", aes_string(group = make.names(this_factor)), span = .6, size = 1, alpha = 0.3) +
+        stat_summary(fun.y = mean, aes_string(group = make.names(this_factor)), geom=c("point"), position = position_dodge(.5)) +
+        stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes_string(group = make.names(this_factor)), position = position_dodge(.5)) + 
+        scale_color_d3(name = "Cluster") + scale_fill_d3(name = "Cluster") + 
+        geom_text_repel(aes(as.numeric(as.character(Time)), value), 
+                         size = 1.5, 
+                         fontface = 'bold', 
+                         color = 'black',
+                         segment.alpha = 0.2,
+                         alpha = 1) +
+        theme_classic() +
+        facet_grid(cluster~., scales = "free")
+    
+    
+    
+     cat("  \n###", this_factor, "\n")
+    
+    print(g)
+    
+    cat("  \n")
+}
+
+
+```
 
 
 # HeartMate-II analysis
@@ -544,15 +777,7 @@ require(reshape2, quietly = T)
 df.HMII <- subset(df, df$`Device Type`=="HMII")
 df.long <- melt(df.HMII, id.vars = colnames(df)[1:13])
 
-groups <- make.names(c("AgeGreater60", 
-                       "Sex",
-                       "LowIntermacs",
-                       "RVAD", 
-                       "Sensitized",
-                       "VAD Indication", 
-                       #"Device Type", 
-                       "Survival",
-                       "Outcome"))
+
 
 names(df.long) <- make.names(names(df.long))
 
@@ -563,18 +788,21 @@ stat_sum_df <- function(fun, geom="errorbar", ...) {
 
 plots.ts <- mclapply(unique(df.long$variable), function(this_var){
     lapply(groups, function(this_groups){
-        ggplot(subset(df.long, df.long$variable == this_var)) +
+        this_df <- subset(df.long, df.long$variable == this_var)
+        ggplot(this_df) +
             aes(x = Time, y = value, group = PatientID) +
             aes_string(color = this_groups, fill = this_groups) +
-            geom_line(alpha = 0.05) + 
-            geom_point(alpha = 0.05) + 
+            geom_line(alpha = 0.2) + 
+            geom_point(alpha = 0.1) + 
             #stat_smooth(aes_string(group = this_groups), method = "loess", span = 1) +
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("point"), position = position_dodge(.5)) + 
-            stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("line"), position = position_dodge(.5)) + 
+            stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("line"), size = 2, position = position_dodge(.5)) + 
+            stat_smooth(method = "loess", aes_string(group = this_groups), size = .01, span = 1, alpha = 0.1) + 
             stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), mapping = aes_string(group = this_groups), position = position_dodge(.5)) + 
             scale_color_aaas() + scale_fill_aaas() +
             xlab("Time (days after surgery)") +
             ylab(this_var) + 
+            scale_x_continuous(breaks = unique(this_df$Time)) +
             ggtitle(paste(this_var)) +
             theme_classic()
     })
@@ -638,9 +866,9 @@ for(ii in 1:length(plots.pca)){
 ```
 
 
-## Temporal clusters
+## Temporal patterns
 
-After double-standardizing the data, we clustered the biomarkers according to their temporal patterns. They form 4 main clusters.
+After double-standardizing the data, we clustered the biomarkers according to their temporal patterns. They formed 4 main clusters.
 
 ```{r temporal_clusters, warning=F, message=F, fig.height=9}
 df.ds <- df.HMII
@@ -704,6 +932,10 @@ annotation.row$Cluster <- cluster
 annotation.colors$Cluster <- colorfun(nlevels(factor(annotation.row$Cluster)))
 names(annotation.colors$Cluster) <- factor(unique(annotation.row$Cluster))
 
+# add in clusters from the first clustering
+annotation.row$bicluster <- bicluster$biomarkers
+annotation.colors$bicluster <- bicluster$annotation.colors
+
 ph2 <- pheatmap(df.means, 
          color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
          breaks = c(seq(-max(abs(df.means), na.rm=T), 0, length.out = 50), seq(0.001, max(abs(df.means), na.rm=T), length.out = 50)),
@@ -728,7 +960,7 @@ print(ph2)
 ```
 
 
-We depicted each cluster's temporal pattern as a smooth function of time, using a LOESS model. They reveal clear temporal dynamics occurring at multiple timescales.
+We depicted each biomarker cluster's temporal pattern as a smooth function of time, using a LOESS regression model. There are clear temporal dynamics occurring at multiple timescales.
 
 ```{r, warning=F, message=F}
 colnames(df.means) <- unique(means.long$Time)
@@ -744,14 +976,131 @@ df.clustermeans <- melt(df.means, id.vars = c("Molecule", "cluster"), variable.n
 ggplot(df.clustermeans) + 
     aes(x=as.numeric(as.character(Time)), y=z, 
         color = cluster, group=Molecule, fill = cluster) + 
-    geom_point(alpha = 0.05) + 
-    geom_line(alpha = 0.05) +
+    geom_point(alpha = 0.1, size = 1) + 
+    geom_line(alpha = 0.2) +
     xlab("Time (days)") +
     ylab("Standardized level (z-score)") +
     ggtitle("Temporal Clusters") +
-    stat_smooth(method = "loess", aes(group = cluster), span = .8) +
+    scale_x_continuous(breaks = as.numeric(as.character(unique(df.clustermeans$Time)))) +
+    stat_summary(fun.y = mean, aes(group = cluster), geom=c("line"), size = .02, position = position_dodge(.5)) +
+    stat_smooth(method = "loess", aes(group = cluster), span = .6, size = 1, alpha = 0.2) +
+    stat_summary(fun.y = mean, aes(group = cluster), geom=c("point"), position = position_dodge(.5)) +
+    stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes(group = cluster), position = position_dodge(.5)) + 
     scale_color_d3() + scale_fill_d3() + 
     theme_classic()
+
+```
+
+
+## Temporal patterns across categories  {.tabset .tabset-fade .tabset-pills}
+
+We analyzed the temporal patterns of each cluster with respect to each of the patient categories. 
+
+
+```{r, results='asis'}
+
+df.ds.long <- melt(df.ds, id.vars = colnames(df)[1:13])
+
+make_long_with_clusterID <- function(dataframe, form, cluster, func = function(x) mean(x, na.rm=T)){
+    colnames(dataframe) <- make.names(colnames(dataframe))
+    this_df <- aggregate(form, data = dataframe, FUN = func)
+    this_df$cluster <- cluster[match(this_df$variable, names(cluster))]
+    return(this_df)
+}
+
+
+
+
+for(this_factor in groups){
+    cat("  \n###", this_factor, "\n")
+    
+    this_formula <- as.formula(paste0("value~variable*Time*", make.names(this_factor)))
+    this_df <- make_long_with_clusterID(df.ds.long, 
+                                        this_formula,
+                                        cluster)
+    
+    this_df$name <- as.character(this_df$variable )
+    
+    # compute t-tests
+    presult <- lapply(split(this_df, this_df$cluster), function(x){
+        lapply(split(x, as.factor(x$Time)), function(y){
+            n <- table(y[[make.names(this_factor)]])
+            if(all(n > 1) & length(n)==2){
+                # this crapped out because of missing pair
+                #res <- t.test(as.formula(paste0("value ~ ", make.names(this_factor))), paired = TRUE, data = y)
+                #t <- res$statistic
+                #p <- res$p.value
+                
+                require(lmerTest, quietly = T)
+                lme <- lmer(as.formula(paste0("value ~ ", make.names(this_factor), " + (1|name)")), data = y)
+                lme.aov <- anova(lme)
+                p <- lme.aov$`Pr(>F)`
+                
+            } else {
+                t <- 0
+                p <- 1
+            }
+           return(p)
+        })  
+    }) 
+    
+    require(stringr, quietly = T)
+    q <- p.adjust(unlist(presult), method = "BH")
+    q_clusters <- sapply(str_split(names(q), "[.]"), function(x) x[1])
+    q_time <- sapply(str_split(names(q), "[.]"), function(x) x[2])
+    these_qvals <- data.frame(qval = q, cluster = q_clusters, Time = q_time)
+    
+    # label only significant differences
+    for(this_cluster in levels(factor(this_df$cluster))){
+        # this_pvals <- presult[[this_cluster]]
+        # this_qvals <- p.adjust(this_pvals, method = "bonferroni")
+        #pos <- this_qvals < 0.05
+        for(this_time in levels(factor(this_df$Time))){
+            this_qval <- these_qvals$qval[these_qvals$cluster == this_cluster & these_qvals$Time == this_time]
+            #ii <- which(names(this_qvals) == this_time)
+            if(length(this_qval) > 0){
+                if(this_qval < 0.05){
+                    this_df$name[this_df$cluster == this_cluster & this_df$Time == this_time & this_df[[this_factor]] == levels(this_df[[this_factor]])[1]] <- ""
+                } else {
+                    this_df$name[this_df$cluster == this_cluster & this_df$Time == this_time] <- ""
+                }
+            } else {
+                next()
+            }
+        }
+    }
+    
+    
+    
+    g <- ggplot(this_df) + 
+        aes(x=as.numeric(as.character(Time)), y=value, 
+            color = factor(cluster), fill = factor(cluster), label = name) + 
+        aes_string(group = paste("interaction(variable,", make.names(this_factor), ")"), lty = make.names(this_factor)) +
+        geom_jitter(alpha = 0.1, size = 1) + 
+        geom_line(alpha = 0.2) +
+        xlab("Time (days)") +
+        ylab("Standardized level (z-score)") +
+        ggtitle(this_factor) +
+        #stat_smooth(method = "loess", aes_string(group = make.names(this_factor)), span = .6) +
+        scale_x_continuous(breaks = as.numeric(as.character(unique(this_df$Time)))) +
+    stat_summary(fun.y = mean, aes_string(group = make.names(this_factor)), geom=c("line"), size = .02, position = position_dodge(.5)) +
+    stat_smooth(method = "loess", aes_string(group = make.names(this_factor)), span = .6, size = 1, alpha = 0.3) +
+    stat_summary(fun.y = mean, aes_string(group = make.names(this_factor)), geom=c("point"), position = position_dodge(.5)) +
+    stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), mapping = aes_string(group = make.names(this_factor)), position = position_dodge(.5)) + 
+        scale_color_d3(name = "Cluster") + scale_fill_d3(name = "Cluster") + 
+        geom_text_repel(aes(as.numeric(as.character(Time)), value), 
+                         size = 0.8, 
+                         fontface = 'bold', 
+                         color = 'black',
+                         segment.alpha = 0.2,
+                         alpha = 1) +
+        theme_classic() +
+        facet_grid(~cluster, scales = "free")
+    print(g)
+    
+    cat("  \n")
+}
+
 
 ```
 
@@ -831,6 +1180,7 @@ qvals.df.short <- qvals.df[pvals.df$qvalue <= 0.05,]
 shortlist <- qvals.df.short[order(qvals.df.short$qvalue),]
 rownames(shortlist) <- 1:nrow(shortlist)
 
+shortlist$cluster <- cluster[match(shortlist$biomarker, names(cluster))]
 shortlist$qvalue <- signif(shortlist$qvalue, 3)
 shortlist %>%
     mutate(
@@ -845,6 +1195,16 @@ shortlist %>%
                   font_size = 10) %>%
     scroll_box(width = "100%")
 
+this_table <- table(category = shortlist$parameter, cluster = shortlist$cluster)
+kable(this_table) %>% 
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%")
+
+fisher.test(this_table, simulate.p.value = T)
 
 # kable(shortlist, 
 #       digits = 3,
@@ -962,6 +1322,7 @@ qvals.df.short <- qvals.df[pvals.df$qvalue <= 0.05,]
 shortlist <- qvals.df.short[order(qvals.df.short$qvalue),]
 rownames(shortlist) <- 1:nrow(shortlist)
 
+shortlist$cluster <- cluster[match(shortlist$biomarker, names(cluster))]
 shortlist$qvalue <- signif(shortlist$qvalue, 3)
 shortlist %>%
     mutate(
@@ -976,6 +1337,16 @@ shortlist %>%
                   font_size = 10) %>%
     scroll_box(width = "100%")
 
+this_table <- table(category = shortlist$parameter, cluster = shortlist$cluster)
+kable(this_table) %>% 
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%")
+
+fisher.test(this_table, simulate.p.value = T)
 
 # kable(shortlist, 
 #       digits = 3,
@@ -1096,6 +1467,7 @@ qvals.df.short <- qvals.df[pvals.df$qvalue <= 0.05,]
 shortlist <- qvals.df.short[order(qvals.df.short$qvalue),]
 rownames(shortlist) <- 1:nrow(shortlist)
 
+shortlist$cluster <- cluster[match(shortlist$biomarker, names(cluster))]
 shortlist$qvalue <- signif(shortlist$qvalue, 3)
 shortlist %>%
     mutate(
@@ -1110,6 +1482,16 @@ shortlist %>%
                   font_size = 10) %>%
     scroll_box(width = "100%")
 
+this_table <- table(category = shortlist$parameter, cluster = shortlist$cluster)
+kable(this_table) %>% 
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%")
+
+fisher.test(this_table, simulate.p.value = T)
 
 # kable(shortlist, 
 #       digits = 3,
@@ -1309,8 +1691,8 @@ plots.ts <- mclapply(rownames(qtable), function(this_var){
         ggplot(subset(df.long, df.long$variable == this_var)) +
             aes(x = Time, y = value, group = PatientID) +
             aes_string(color = this_groups, fill = this_groups) +
-            geom_line(alpha = 0.05) + 
-            geom_point(alpha = 0.05) + 
+            geom_line(alpha = 0.2) + 
+            geom_point(alpha = 0.1) + 
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("point"), position = position_dodge(.5)) + 
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("line"), position = position_dodge(.5)) + 
             stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), mapping = aes_string(group = this_groups), position = position_dodge(.5)) + 
@@ -1420,8 +1802,8 @@ plots.ts <- mclapply(rownames(qtable), function(this_var){
         ggplot(subset(df.long, df.long$variable == this_var)) +
             aes(x = Time, y = value, group = PatientID) +
             aes_string(color = this_groups, fill = this_groups) +
-            geom_line(alpha = 0.05) + 
-            geom_point(alpha = 0.05) + 
+            geom_line(alpha = 0.2) + 
+            geom_point(alpha = 0.1) + 
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("point"), position = position_dodge(.5)) + 
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("line"), position = position_dodge(.5)) + 
             stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), mapping = aes_string(group = this_groups), position = position_dodge(.5)) + 
@@ -1530,8 +1912,8 @@ plots.ts <- mclapply(rownames(qtable), function(this_var){
         ggplot(subset(df.long, df.long$variable == this_var)) +
             aes(x = Time, y = value, group = PatientID) +
             aes_string(color = this_groups, fill = this_groups) +
-            geom_line(alpha = 0.05) + 
-            geom_point(alpha = 0.05) + 
+            geom_line(alpha = 0.2) + 
+            geom_point(alpha = 0.1) + 
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("point"), position = position_dodge(.5)) + 
             stat_summary(fun.y = mean, aes_string(group = this_groups), geom=c("line"), position = position_dodge(.5)) + 
             stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), mapping = aes_string(group = this_groups), position = position_dodge(.5)) + 
