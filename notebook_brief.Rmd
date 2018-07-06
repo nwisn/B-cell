@@ -1,0 +1,386 @@
+---
+title: "Analysis of immune biomarkers after MCS device implantation"
+author: "Nicholas Wisniewski"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    collapsed: true
+    number_sections: false
+    theme: cosmo
+    df_print: kable
+    code_folding: hide
+---
+
+```{r load_libraries, message=F, warning=F}
+load("data_combined.RData")
+df$`Device Type` <- relevel(df$`Device Type`, ref = "HMII")
+bc <- 14:42
+cyt <- 43:80
+bcellcyto <- c(bc,cyt)
+groups <- make.names(c("AgeGreater60", 
+                       "Sex",
+                       "LowIntermacs",
+                       "RVAD", 
+                       "Sensitized",
+                       "VAD Indication", 
+                       "Survival"
+                       ))
+FDRcutoff <- 0.1
+pcutoff <- 0.05
+
+# HMII wide
+df.HMII <- droplevels(subset(df, df$`Device Type` == "HMII"))
+
+suppressMessages(require(knitr, quietly = T))
+suppressMessages(require(kableExtra, quietly = T))
+suppressMessages(require(rmarkdown, quietly = T))
+suppressMessages(require(plyr, quietly = T))
+suppressMessages(require(dplyr, quietly = T))
+suppressMessages(require(parallel, quietly = TRUE))
+suppressMessages(require(ggsci, quietly = TRUE))
+suppressMessages(require(ggplot2, quietly = T))
+suppressMessages(require(GGally, quietly = T))
+suppressMessages(require(reshape2, quietly = T))
+suppressMessages(require(stringr, quietly = T))
+#capture.output(invisible(suppressMessages(require(WGCNA, quietly = T))))
+suppressMessages(require(lmerTest, quietly = TRUE))
+suppressMessages(require(car, quietly = TRUE))
+suppressMessages(require(fdrtool, quietly = TRUE))
+suppressMessages(require(pheatmap, quietly = TRUE))
+suppressMessages(require(RColorBrewer, quietly = TRUE))
+
+# Efron's double standardization
+double_standardize <- function(x, niter = 1000) {
+    for(i in 1:niter) x <- t(scale(t(scale(x))))
+    return(as.data.frame(x))
+}
+
+# Error bars
+invisible(suppressMessages(require(Hmisc, quietly = T)))
+stat_sum_df <- function(fun, geom="errorbar", ...) {
+    stat_summary(fun.data = fun, geom = geom, width = 1, ...)
+}
+
+
+```
+
+
+# HeartMate-II analysis
+
+`r nlevels(df.HMII$PatientID)` heart-failure patients receiving the Heartmate-II were sampled at `r length(unique(df.HMII$Time))` timepoints after MCS device implantation. Each sample consisted of `r length(bcellcyto)` biomarker measurements -- `r length(bc)` B-cell markers and `r length(cyt)` cytokine markers. Additionally, each patient was associated with `r length(groups)` categorical variables, such as age, sex, interMACS score, and survival. However, due to practical limitations, not all samples were complete. After accounting for missing data, there are a total of `r nrow(df.HMII) - length(Reduce(intersect, apply(df.HMII[,bcellcyto], 2, function(x) which(is.na(x)))))` datapoints.
+
+
+## Specific aims
+
+* Our aim was to identify if any of the `r length(bcellcyto)` biomarkers are associated with any of the `r length(groups)` categorical variables, at a false discovery rate of 10%. 
+
+
+
+## Methods
+
+### Raw data
+
+Data was collected at a single university medical center.
+
+```{r show_raw_data, eval=T, message=FALSE}
+missing.ix <- Reduce(intersect, apply(df.HMII[,bcellcyto], 2, function(x) which(is.na(x))))
+df.raw <- df.HMII[-missing.ix,]
+df.raw <- df.raw[order(df.raw$PatientID),]
+rownames(df.raw) <- 1:nrow(df.raw)
+kable(df.raw, 
+      digits = 3,
+      row.names = T,
+      caption = "HeartMate-II Raw Data"
+) %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 12) %>%
+    scroll_box(width = "100%", height = "300px") 
+
+```
+
+
+
+
+
+
+### Linear mixed-effect model
+
+We identified biomarkers associated with the categorical variables using a linear mixed effect model. Our model had a random intercept for each subject, and 3 fixed effects for the category, timepoint, and their interaction. This model is equivalent to a two-way repeated measures anova, but also has the ability to fit in the presence of missing data. It has the form
+
+$$y_{ij}=b_0 +\sum_{k=1}^p b_k x_{ijk} + v_{i0}+\epsilon_{ij}$$
+
+for $i\in\{1,...,20\}$ subjects, $j\in\{1,...,7\}$ measurements for each subject, and $k\in1,...,p$ predictors or contrasts, where
+
+* $y_{ij}\in\mathbb{R}$ is the response for the $j$-th measurement of the $i$-th subject
+* $b_0\in\mathbb{R}$ is the fixed intercept for the model
+* $b_k\in\mathbb{R}$ is the fixed slope for the $k$-th predictor or contrast
+* $x_{ijk}\in\mathbb{R}$ is the $j$-th measurement of the $k$-th predictor for the $i$-th subject
+* $v_{i0}\sim N(0,\sigma_0^2)$ is the random intercept for the $i$-th subject
+* $e_{ij}\sim N(0,\sigma_e^2)$ is a Gaussian error term
+
+
+The fundamental assumptions of this model are:
+
+* the relationship between X and Y is linear
+* $x_{ijk}$ and $y_{ij}$ are observed random variables 
+* $v_{i0} \sim N(0,\sigma_v^2)$ is an unobserved random variable, being the random intercept for the $i$-th subject
+* $\epsilon_{ij}\sim N(0,\sigma_e^2)$ is an unobserved random variable, being the Gaussian error term
+* $v_{i0}$ and $e_{ij}$ are independent of one another
+* $b_0$ and $b_1$ are unknown constants, being the fixed intercept and fixed slope for the regression model
+* $(y_{ij}|x_{ij})\sim N(b_0+b_1 x_{ij}, \sigma_Y^2)$ where $\sigma_Y^2=\sigma_v^2+\sigma_e^2$
+
+In implementing the contrasts and statistical tests in R, we followed the advice found  [here](https://rstudio-pubs-static.s3.amazonaws.com/65059_586f394d8eb84f84b1baaf56ffb6b47f.html) and [here](https://mcfromnz.wordpress.com/2011/03/02/anova-type-iiiiii-ss-explained/), by using zero-sum contrast `contr.sum`, and obtaining type 3 sums of squares using the `car` package. Type 3 sums of squares look like $S(A|B,AB)$, and test a main effect after the other main effect and interaction. The significance estimates are therefore valid in the presence of significant interactions. 
+
+We would have also heeded the [guidelines](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3672519/) on including random slopes for the within factor when testing for interactions, but the number of random effects would have exceeded teh number of observations.
+
+
+```{r, cache = T}
+
+
+# make sure column names are valid R variables before fitting
+df.HMII.valid <- df.HMII
+colnames(df.HMII.valid) <- make.names(colnames(df.HMII), unique = T)
+
+# function to fit a two-way repeated measures anova
+anova.fit <- function(this_group, this_variable, this_df){
+    this_df$Time <- as.factor(this_df$Time)
+    this_formula <- as.formula(paste0(this_variable, " ~ ", this_group, " * Time + (1|PatientID)"))
+    # set contrasts
+    contrasts(this_df[[this_group]]) <- contr.sum 
+    contrasts(this_df$Time) <- contr.sum
+    # fit model
+    this_model <- lmer(this_formula, data = this_df)
+    return(list(model = this_model, group = this_group, variable = this_variable))
+}
+
+# function to get stats on the model fit
+get.anovatable <- function(anova.fit.obj){
+    # unpack
+    this_model <- anova.fit.obj$model
+    this_variable <- anova.fit.obj$variable
+    this_group <- anova.fit.obj$group
+    # compute p-values
+    this_aov <- as.data.frame(Anova(this_model, type="III"))[-1,]
+    # annotate with additional variables
+    this_aov$parameter <- rownames(this_aov)
+    this_aov$variable <- rep(this_variable, nrow(this_aov))
+    this_aov$group <- rep(this_group, nrow(this_aov))
+    return(this_aov)
+}
+
+# create the list of variable ~ group comparisons to run mclapply over
+groups.by.vars <- unlist(lapply(make.names(groups, unique = T), function(this_group){
+    lapply(make.names(colnames(df.HMII[,bcellcyto]), unique = T), function(this_variable){
+        list(group = this_group, variable = this_variable)
+    })
+}), recursive = F)
+
+# fit all models in parallel
+models.HMII <- mclapply(groups.by.vars, function(this_e){
+    anova.fit(this_e$group, this_e$variable, df.HMII.valid)
+})
+
+# compute statistics in parallel
+anovatable.0 <- mclapply(models.HMII, function(this_model_obj){
+    get.anovatable(this_model_obj)
+}, mc.cores = detectCores()-1)
+
+# include original variable names and add an index for splitting on later
+anovatable <- lapply(1:length(anovatable.0), function(ii){
+    this_table <- anovatable.0[[ii]]
+    name.ix <- match(unique(this_table$variable), colnames(df.HMII.valid))
+    this_table$variable.valid <- this_table$variable
+    this_table$variable <- rep(colnames(df.HMII)[name.ix], nrow(this_table))
+    this_table$testid <- rep(ii, nrow(this_table))
+    this_table
+})
+
+```
+
+
+### False Discovery Rate
+
+In all, there were `r length(anovatable)` models fit, each with `r nrow(anovatable[[1]])` terms, for a total of `r length(anovatable)*nrow(anovatable[[1]])` hypotheses tested. We computed local false discovery rates and $q$-values using the `fdrtool` package, which produced three figures illustrating the mixture model of the $p$-value distribution and the local false discovery rate.
+
+```{r, fig.height = 12, cache = T}
+# compute fdr
+models <- as.data.frame(do.call(rbind, anovatable))
+fdrobj <- fdrtool(models$`Pr(>Chisq)`, statistic = "pvalue", verbose = F)
+models$qval <- fdrobj$qval
+models$lfdr <- fdrobj$lfdr
+anovatable.fdr <- split(models, models$testid)
+
+```
+
+
+## Results
+
+We reported all results with $q<0.10$ as statistically significant.
+
+```{r, cache = T}
+# collect pvalues and qvalues into matrix
+models.fdr <- do.call(rbind, anovatable.fdr)
+qmat <- dcast(models.fdr, group+parameter~variable, value.var = "qval")
+pmat <- dcast(models.fdr, group+parameter~variable, value.var = "Pr(>Chisq)")
+
+# find significant results and mark with text qvalue
+qmask <- signif(qmat[,-c(1,2)], 2)
+qmask[qmat[,-c(1,2)] > FDRcutoff] <- ""
+keep.signif <- apply(t(qmask), 1, function(x) !all(x == ""))
+# 
+# # create heatmap of results
+# pheatmap(-log10(t(qmat[,-c(1,2)])[keep.signif,c(3,1,2,4:nrow(pmat))]),
+#          color = colorRampPalette(brewer.pal(n = 9, name = "Greens"))(4),
+#          breaks = c(seq(0, -log10(0.1), length.out = 2),
+#                     seq(-log10(0.1)+0.001, max(-log10(t(qmat[,-c(1,2)])[keep.signif,])), length.out = 2)),
+#          labels_col = pmat$parameter[c(3,1,2,4:nrow(pmat))],
+#          display_numbers = t(qmask)[keep.signif,c(3,1,2,4:nrow(pmat))],
+#          number_color = "white",
+#          fontsize_number = 6,
+#          cluster_cols = F,
+#          cluster_rows = F,
+#          gaps_col = seq(3, nrow(pmat), by = 3),
+#          border_color = NA,
+#          legend = F,
+#          main = paste0("ANOVA results (FDR=", FDRcutoff, ")"))
+
+# gather significant results into a table
+resulttable <- do.call(rbind, apply(which(qmask != "", arr.ind = T), 1, function(x){
+    data.frame(biomarker = colnames(qmat)[-c(1,2)][x[2]],
+               group = qmat$group[x[1]], 
+               parameter = qmat$parameter[x[1]], 
+               pvalue = pmat[,-c(1,2)][x[1], x[2]], 
+               qvalue = qmat[,-c(1,2)][x[1], x[2]])
+}))
+
+resulttable.sort <- resulttable[order(resulttable$pvalue), , drop = F]
+resulttable.sort[,c("pvalue","qvalue")] <- signif(resulttable.sort[,c("pvalue","qvalue")], 3)
+rownames(resulttable.sort) <- 1:nrow(resulttable.sort)
+resulttable.sort %>%
+    # mutate(
+    #     pvalue = cell_spec(pvalue, color = ifelse(resulttable.sort$pvalue > pcutoff, "grey", "green")),
+    #     qvalue = cell_spec(qvalue, color = ifelse(resulttable.sort$qvalue > FDRcutoff, "grey", "green"))
+    # ) %>% 
+    kable(escape = F, row.names = T) %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%")
+
+```
+
+
+
+
+## Figures {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = 'asis', message = F, warning=F}
+
+# long
+df.long <- melt(df.HMII, id.vars = colnames(df)[1:13])
+names(df.long) <- make.names(names(df.long))
+
+# list of identifiers for significant results to plot
+unique_results <- unique(resulttable.sort[,c("biomarker","group")])
+
+# make all timeseries plots
+plots.ts <- mclapply(1:nrow(unique_results), function(ii){
+    this_var <- as.character(unique_results[ii, "biomarker"])
+    this_groups <- as.character(unique_results[ii, "group"])
+    this_df.0 <- droplevels(subset(df.long, df.long$variable == this_var))
+    this_df <- droplevels(this_df.0[!is.na(this_df.0$value),])
+    ggplot(this_df) +
+        aes(x = Time, y = value, group = PatientID) +
+        aes_string(color = this_groups, fill = this_groups) +
+        geom_line(alpha = 0.2) + 
+        geom_point(alpha = 0.1) + 
+        stat_summary(fun.y = mean, 
+                     aes_string(group = this_groups), 
+                     geom=c("point"), 
+                     position = position_dodge(.5)) + 
+        stat_summary(fun.y = mean, 
+                     aes_string(group = this_groups), 
+                     geom=c("line"), 
+                     size = 2, 
+                     position = position_dodge(.5)) + 
+        # stat_smooth(method = "loess", 
+        #             aes_string(group = this_groups), 
+        #             size = .01, 
+        #             span = 1, 
+        #             alpha = 0.1) + 
+        stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), 
+                    mapping = aes_string(group = this_groups), 
+                    position = position_dodge(.5)) + 
+        scale_color_aaas() + scale_fill_aaas() +
+        xlab("Time (days after surgery)") +
+        ylab(this_var) + 
+        scale_x_continuous(breaks = unique(this_df$Time)) +
+        ggtitle(paste(this_var)) +
+        theme_classic()
+}, mc.cores = detectCores()-1)
+names(plots.ts) <- paste(unique_results$biomarker, unique_results$group, sep = " | ")
+
+p2stars <- function(p){
+    if(p >= 0.1) s <- ""
+    if(p < 0.1 & p >= 0.05) s <- "."
+    if(p < 0.05 & p >= 0.01) s <- "*"
+    if(p < 0.01 & p >= 0.001) s <- "**"
+    if(p < 0.001 & p >= 0.0001) s <- "***"
+    if(p < 0.0001 & p >= 0) s <- "****"
+    return(s)
+}
+
+# print out results
+for(ii in 1:length(plots.ts)){
+    cat("  \n###", names(plots.ts)[ii], "\n")
+    
+    
+    testid <- unique(models.fdr$testid[models.fdr$variable == unique_results$biomarker[ii] & 
+                                           models.fdr$group == unique_results$group[ii]])
+    this_anova <- anovatable.fdr[[testid]][,c("variable", "group", "parameter", "Chisq", "Df", "Pr(>Chisq)", "qval", "lfdr")]
+    this_anova$stars <- sapply(this_anova$`Pr(>Chisq)`, p2stars)
+    print(this_anova %>%
+    # mutate(
+    #     pvalue = cell_spec(pvalue, color = ifelse(resulttable.sort$pvalue > pcutoff, "grey", "green")),
+    #     qvalue = cell_spec(qvalue, color = ifelse(resulttable.sort$qvalue > FDRcutoff, "grey", "green"))
+    # ) %>% 
+    kable(escape = F, row.names = F) %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+    cat("  \n")
+    
+    suppressWarnings(print(plots.ts[[ii]]))
+    cat("  \n")
+    
+    model.summary <- summary(models.HMII[[testid]]$model)
+    this_summary <- as.data.frame(model.summary$coefficients)
+    this_summary$stars <- sapply(this_summary$`Pr(>|t|)`, p2stars)
+    print(this_summary %>%
+    # mutate(
+    #     pvalue = cell_spec(pvalue, color = ifelse(resulttable.sort$pvalue > pcutoff, "grey", "green")),
+    #     qvalue = cell_spec(qvalue, color = ifelse(resulttable.sort$qvalue > FDRcutoff, "grey", "green"))
+    # ) %>% 
+    kable(escape = F, row.names = T) %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+    cat("  \n")
+
+}
+
+```
+

@@ -162,13 +162,13 @@ require(factoextra, quietly = T)
 g.scree <- fviz_screeplot(pca, ncp = 20)
 
 # Contributions of variables to PC1
-g.1 <- fviz_contrib(pca, choice = "var", axes = 1, top = 10, sort.val = "asc") + coord_flip()
+g.1 <- fviz_contrib(pca, choice = "var", axes = 1, top = 20, sort.val = "asc") + coord_flip()
 # Contributions of variables to PC2
-g.2 <- fviz_contrib(pca, choice = "var", axes = 2, top = 10, sort.val = "asc") + coord_flip()
+g.2 <- fviz_contrib(pca, choice = "var", axes = 2, top = 20, sort.val = "asc") + coord_flip()
 # Contributions of variables to PC3
-g.3 <- fviz_contrib(pca, choice = "var", axes = 3, top = 10, sort.val = "asc") + coord_flip()
+g.3 <- fviz_contrib(pca, choice = "var", axes = 3, top = 20, sort.val = "asc") + coord_flip()
 # Contributions of variables to PC4
-g.4 <- fviz_contrib(pca, choice = "var", axes = 4, top = 10, sort.val = "asc") + coord_flip()
+g.4 <- fviz_contrib(pca, choice = "var", axes = 4, top = 20, sort.val = "asc") + coord_flip()
 
 print(g.scree)
 print(g.1)
@@ -176,6 +176,93 @@ print(g.2)
 #print(g.3)
 #print(g.4)
 ```
+
+
+## Principal component regression
+
+
+```{r}
+require(lmerTest, quietly = T)
+require(parallel, quietly = T)
+require(fdrtool, quietly = T)
+
+eigencoords <- as.data.frame(pca$x)
+df.eigen <- as.data.frame(cbind(df.HMII[-isna, 1:13], eigencoords))
+colnames(df.eigen) <- make.names(colnames(df.eigen))
+
+testfun <- function(this_group, this_variable){
+    this_formula <- as.formula(paste0(this_variable, " ~ ", this_group, " * factor(Time) + (1|PatientID)"))
+    this_model <- lmer(this_formula, data = df.eigen)
+    this_aov <- as.data.frame(Anova(this_model))
+    this_aov$parameter <- rownames(this_aov)
+    this_aov$variable <- rep(this_variable, nrow(this_aov))
+    return(this_aov)
+}
+
+groups.by.vars <- lapply(groups, function(this_group){
+    lapply(colnames(eigencoords), function(this_variable){
+        list(this_group = this_group, this_variable = this_variable)
+    })
+})
+
+model.list.0 <- mclapply(unlist(groups.by.vars, recursive = F), function(this_e){
+    this_aov <- testfun(this_e$this_group, this_e$this_variable)
+    this_aov 
+}, mc.cores = detectCores()-1)
+model.list <- lapply(1:length(model.list.0), function(ii){
+    model.list[[ii]]$id <- ii
+    model.list[[ii]]
+})
+models <- as.data.frame(do.call(rbind, model.list))
+fdrobj <- fdrtool(models$`Pr(>Chisq)`, statistic = "pvalue", verbose = F)
+models$qval <- fdrobj$qval
+models$lfdr <- fdrobj$lfdr
+
+model.list.q <- split(models, models$id)
+porder <- order(sapply(model.list.q, function(this) min(this$`Pr(>Chisq)`[c(1,3)])))
+model.list.q[porder][1:5]
+
+models.sub <- do.call(rbind, lapply(model.list.q, function(this) this[c(1,3),]))
+#models.signif <- models.sub[models.sub$`Pr(>Chisq)` < 0.05,]
+
+qmat <- dcast(models.sub, factor(parameter)~variable, value.var = "qval")
+pmat <- dcast(models.sub, parameter~variable, value.var = "Pr(>Chisq)")
+
+qmask <- signif(qmat[,-1], 2)
+qmask[qmat[,-1] >= 0.1] <- ""
+
+pheatmap(-log10(t(pmat[,paste0("PC", 1:nrow(eigencoords))])), 
+         color = colorRampPalette(brewer.pal(n = 7, name = "Reds"))(100),
+         #breaks = c(seq(0, -log10(0.05), length.out = 50), 
+         #           seq(-log10(0.05)+0.001, max(-log10(pmat[,paste0("PC", 1:nrow(eigencoords))])), length.out = 50)),
+         labels_col = pmat$parameter, 
+         display_numbers = t(qmask[,paste0("PC", 1:nrow(eigencoords))]), 
+         cluster_cols = F, 
+         cluster_rows = F,
+         gaps_col = seq(2,nrow(pmat), by = 2))
+
+df.eigen.long <- melt(df.eigen, id.vars = colnames(df.eigen)[1:13])
+this_df <- subset(df.eigen.long, df.eigen.long$variable %in% paste0("PC", 1:4))
+ggplot(this_df) + 
+    aes(x = Time, y = value, color = variable, fill = variable, group = paste0(PatientID, variable)) + 
+    geom_point(alpha = 0.1, size = 1) + 
+        geom_line(alpha = 0.2) +
+        xlab("Time (days)") +
+        ylab("Standardized level (z-score)") +
+        scale_x_continuous(breaks = unique(this_df$Time)) +
+        #ggtitle(this_factor) +
+        stat_summary(fun.y = mean, aes(group = variable), geom=c("line"), size = .02, position = position_dodge(.5)) +
+        stat_smooth(method = "loess", aes(group = variable), span = .5, size = 1, alpha = 0.1) +
+        stat_summary(fun.y = mean, aes(group = variable), geom=c("point"), position = position_dodge(.5)) +
+        stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), mapping = aes(group = variable), position = position_dodge(.5)) + 
+        scale_color_simpsons(name = "Cluster") + scale_fill_simpsons(name = "Cluster") + 
+        theme_classic() 
+
+
+
+
+```
+
 
 
 
