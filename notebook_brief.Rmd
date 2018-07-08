@@ -1,14 +1,18 @@
 ---
-title: "Analysis of immune biomarkers after MCS device implantation"
-author: "Nicholas Wisniewski"
+title: "Temporal expression of cytokines and B-cell phenotypes during mechanical circulatory support"
+subtitle: "Supplemental material"
+author: "Nicholas Wisniewski \n\n"
+abstract: This Rmarkdown notebook performs all of the statistical analysis for the associated manuscript. We included it in an effort to improve reproducibilty, by providing full transparency concerning our statistical methods. After downloading the dataset and installing all the required R packages, this entire html file (including all the figures) can be created using Knitr. 
 output:
   html_document:
     toc: true
     toc_depth: 4
     toc_float: true
     collapsed: true
-    number_sections: false
-    theme: cosmo
+    number_sections: true
+    fig_caption: true
+    theme: flatly
+    highlight: zenburn
     df_print: kable
     code_folding: hide
 ---
@@ -20,11 +24,42 @@ capture.output(invisible(suppressMessages(suppressWarnings(require(WGCNA, quietl
 
 
 ```{r load_libraries, message=F, warning=F}
+# load libraries
+required_packages <- c("knitr",
+                       "kableExtra",
+                       "rmarkdown",
+                       "plyr",
+                       "dplyr",
+                       "parallel",
+                       "ggsci",
+                       "ggplot2",
+                       "GGally",
+                       "reshape2",
+                       "stringr",
+                       "lmerTest",
+                       "car",
+                       "fdrtool",
+                       "pheatmap",
+                       "RColorBrewer",
+                       "factoextra",
+                       "NbClust",
+                       "gridExtra",
+                       "emmeans")
+invisible(temp <- lapply(required_packages, function(x) require(x, quietly = T, character.only = TRUE) ))
+
+# load data
 load("data_combined.RData")
 df$`Device Type` <- relevel(df$`Device Type`, ref = "HMII")
-bc <- 14:42
-cyt <- 43:80
+
+# subset to only HMII patients
+df.HMII <- droplevels(subset(df, df$`Device Type` == "HMII"))
+
+# set options
+bc <- 14:42 # col index of b-cells in df
+cyt <- 43:80 # col index of cytokines in df
 bcellcyto <- c(bc,cyt)
+
+# set patient groups
 groups <- make.names(c("AgeGreater60", 
                        "Sex",
                        "LowIntermacs",
@@ -33,31 +68,12 @@ groups <- make.names(c("AgeGreater60",
                        "VAD Indication", 
                        "Survival"
                        ))
+
+# set significance requirements
 FDRcutoff <- 0.1
 pcutoff <- 0.05
 
-# HMII wide
-df.HMII <- droplevels(subset(df, df$`Device Type` == "HMII"))
 
-suppressMessages(require(knitr, quietly = T))
-suppressMessages(require(kableExtra, quietly = T))
-suppressMessages(require(rmarkdown, quietly = T))
-suppressMessages(require(plyr, quietly = T))
-suppressMessages(require(dplyr, quietly = T))
-suppressMessages(require(parallel, quietly = TRUE))
-suppressMessages(require(ggsci, quietly = TRUE))
-suppressMessages(require(ggplot2, quietly = T))
-suppressMessages(require(GGally, quietly = T))
-suppressMessages(require(reshape2, quietly = T))
-suppressMessages(require(stringr, quietly = T))
-suppressMessages(require(lmerTest, quietly = TRUE))
-suppressMessages(require(car, quietly = TRUE))
-suppressMessages(require(fdrtool, quietly = TRUE))
-suppressMessages(require(pheatmap, quietly = TRUE))
-suppressMessages(require(RColorBrewer, quietly = TRUE))
-require(factoextra, quietly = T)
-require(NbClust, quietly = T)
-require(gridExtra)
 
 # Efron's double standardization
 double_standardize <- function(x, niter = 1000) {
@@ -73,42 +89,41 @@ stat_sum_df <- function(fun, geom="errorbar", ...) {
 
 # function that converts pvalues to star indicators
 p2stars <- function(p){
-    if(p >= 0.1) s <- ""
-    if(p < 0.1 & p >= 0.05) s <- "."
-    if(p < 0.05 & p >= 0.01) s <- "*"
-    if(p < 0.01 & p >= 0.001) s <- "**"
-    if(p < 0.001 & p >= 0.0001) s <- "***"
-    if(p < 0.0001 & p >= 0) s <- "****"
+    if(is.null(p)) return(".")
+    if(is.na(p)) return(".")
+    if(p >= 0.1) s <- "."
+    if(p < 0.1 & p >= 0.05) s <- ".."
+    if(p < 0.05 & p >= 0.01) s <- ".*"
+    if(p < 0.01 & p >= 0.001) s <- ".**"
+    if(p < 0.001 & p >= 0.0001) s <- ".***"
+    if(p < 0.0001 & p >= 0) s <- ".****"
     return(s)
 }
 
 ```
 
 
-# HeartMate-II analysis
+# Introduction
 
-`r nlevels(df.HMII$PatientID)` heart-failure patients receiving the Heartmate-II mechanical circulatory support device (MCSD) were sampled at `r length(unique(df.HMII$Time))` timepoints after implantation. Each sample consisted of `r length(bcellcyto)` biomarker measurements -- `r length(bc)` B-cell markers and `r length(cyt)` cytokine markers. Additionally, each patient was associated with `r length(groups)` categorical variables, such as age, sex, interMACS score, and survival. Due to practical limitations, not all samples were complete; after accounting for missing data, there are a total of `r nrow(df.HMII) - length(Reduce(intersect, apply(df.HMII[,bcellcyto], 2, function(x) which(is.na(x)))))` datapoints.
+**Background**: `r nlevels(df.HMII$PatientID)` heart-failure patients receiving the Heartmate-II mechanical circulatory support device (MCSD) were sampled at `r length(unique(df.HMII$Time))` timepoints after implantation. Each sample consisted of `r length(bcellcyto)` biomarker measurements -- `r length(bc)` B-cell markers and `r length(cyt)` cytokine markers. Additionally, each patient was associated with `r length(groups)` categorical variables, such as age, sex, interMACS score, and survival. Due to practical limitations, not all samples were complete; after accounting for missing data, there are a total of `r nrow(df.HMII) - length(Reduce(intersect, apply(df.HMII[,bcellcyto], 2, function(x) which(is.na(x)))))` datapoints.
+
+**Specific Aims**: We had the following two specific aims: (1) Our primary aim was to identify if and how any of the `r length(bcellcyto)` biomarkers are associated with any of the `r length(groups)` categorical variables. (2) We also sought to describe any global patterns in the set of biomarkers, such as temporal patterns.
+
+**Methods**: Our methods can be summarized sequentially according to the specific aims: 
+
+1. To identify biomarkers with interesting associations, we used a linear mixed effect model to model group or time effects, or group effects that changed in time. We estimated the local false discovery rate of these results, and reported results with $q<$ `r FDRcutoff`. 
+
+2. To identify specific timepoints where group effects occur, we did a post-hoc analysis using estimated marginal means based on the mixed effect model. We adjusted the statistical significance of all results using the Benjamini-Hochberg method. 
+
+3. To identify biomarker clusters, we biclustered the standardized biomarkers and samples. We also clustered biomarkers by temporal similarity, using the marginal means of each standarized biomarker at every timepoint. We computed the optimal number of clusters for both approaches by maximizing average silhouette width.
+
+4. We related biomarker clusters and temporal clusters to each other, and to the list of significant biomarkers found in (2), using Fisher's exact test.
 
 
-## Specific aims
 
-* Our primary aim was to identify if any of the `r length(bcellcyto)` biomarkers are associated with any of the `r length(groups)` categorical variables, at a false discovery rate of 10%. For this, we used a linear mixed-effect model.
+## Dataset
 
-* We also sought to identify any major temporal patterns in the biomarker panel, using clustering.
-
-
-
-## Methods
-
-### Dataset
-
-Data was collected from patients who underwent MCSD implantation at a single university medical center. Peripheral blood draws for cytokine and B-cell expression assays were performed at days 0,1,3,5,8,14,21. 
-
-* Cytokine and chemokine concentrations from plasma samples were assayed using the 38-multiplex MILLIPLEX Human Cytokine Chemokine Panel I. 
-
-* HLA class I and II single antigen Luminex antibody profiles were performed via flow cytometry on available samples. Allosensitization was defined as HLA antibody production (mean fluorescence intensity > 5000) during the MCSD course. 
-
-* B-cell multiparameter immunophenotypes were performed by staining peripheral blood mononuclear cells for surface markers using fluorochrome-tagged antibodies against CD3, CD5, CD11b, CD 19, CD24, CD27, CD38, CD268, IgD, IgM, and IgG (One Lambda, Inc.). 
+Data was collected from patients who underwent MCSD implantation at a single university medical center. Peripheral blood draws for cytokine and B-cell expression assays were performed at days 0,1,3,5,8,14,21. Cytokine and chemokine concentrations from plasma samples were assayed using the 38-multiplex MILLIPLEX Human Cytokine Chemokine Panel I. HLA class I and II single antigen Luminex antibody profiles were performed via flow cytometry on available samples. Allosensitization was defined as HLA antibody production (mean fluorescence intensity > 5000) during the MCSD course. B-cell multiparameter immunophenotypes were performed by staining peripheral blood mononuclear cells for surface markers using fluorochrome-tagged antibodies against CD3, CD5, CD11b, CD 19, CD24, CD27, CD38, CD268, IgD, IgM, and IgG (One Lambda, Inc.). 
 
 
 ```{r show_raw_data, eval=T, message=FALSE}
@@ -116,10 +131,11 @@ missing.ix <- Reduce(intersect, apply(df.HMII[,bcellcyto], 2, function(x) which(
 df.raw <- df.HMII[-missing.ix,]
 df.raw <- df.raw[order(df.raw$PatientID),]
 rownames(df.raw) <- 1:nrow(df.raw)
+
 kable(df.raw, 
       digits = 3,
       row.names = T,
-      caption = "HeartMate-II Raw Data"
+      caption = "Table 1: Raw data"
 ) %>%
     kable_styling(bootstrap_options = c("striped", 
                                         "hover", 
@@ -131,9 +147,9 @@ kable(df.raw,
 ```
 
 
-#### Categorical associations
+## Categorical associations
 
-For each pair of categories, we tested statistical independence using Fisher's exact test. 
+For each pair of categories, we tested statistical independence using Fisher's exact test, and ranked the results by $p$-value.
 
 
 ```{r , message=FALSE}
@@ -178,11 +194,7 @@ qtable[,-c(1,2,8)] <- signif(fisher.all[,-c(1,2,8)], 3)
 qtable.ordered <- qtable[order(qtable$pvalue),]
 
 qtable.ordered %>%
-    # mutate(
-    #     pvalue = cell_spec(pvalue, color = ifelse(qtable$pvalue > 0.05, "grey", "red")),
-    #     qvalue = cell_spec(qvalue, color = ifelse(qtable$qvalue > 0.05, "grey", "red"))
-    # ) %>% 
-    kable(escape = F, row.names = F) %>%
+    kable(escape = F, row.names = F, caption = "Table 2: Categorical associations") %>%
     kable_styling(bootstrap_options = c("striped", 
                                         "hover", 
                                         "condensed",
@@ -190,48 +202,29 @@ qtable.ordered %>%
                   font_size = 12)
 ```
 
-####  Conditional distributions of categories
 
-We plotted the conditional distributions for each pair of categorical labels.
 
-```{r ggpairs, fig.height=8, message=FALSE, warning=FALSE}
+We plotted the conditional distributions for each pair of categorical labels, using the `GGally` package.
+
+```{r ggpairs, fig.height=8, message=FALSE, warning=FALSE, cache=TRUE, fig.cap="Figure 1: Conditional distributions"}
 ggpairs(df.HMII.valid, columns = groups) + ggplot2::theme_grey(base_size = 7)
 ```
 
 
+# Identifying biomarker associations
 
-### Linear mixed-effect model
+## Linear mixed-effect model
 
-We identified biomarkers associated with the categorical variables using a linear mixed effect model. Our model had a random intercept for each patient, fixed effects for the category and timepoint, and an interaction term. It has the form
+We identified statistical associations in the longitudinal data using a linear mixed effect model implemented in the `lmerTest` package, which builds upon the commonly used `lme4` package. We specifically used a random intercept model, of the form 
 
-$$y_{ij}=b_0 +\sum_{k=1}^p b_k x_{ijk} + v_{i0}+\epsilon_{ij}$$
+`lmer(y ~ Group + Time + Group:Time + (1|PatientID))`, 
 
-for $i\in\{1,...,20\}$ subjects, $j\in\{1,...,7\}$ measurements for each subject, and $k\in1,...,p$ predictors or contrasts, where
+where `y` is a biomarker, `Group` and `Time` are both factor variables, `Group:Time` denotes their interaction, and the `(1|PatientID)` term specifies a random intercept for each patient to account for the repeated measures. There are therefore 3 hypotheses being tested -- one for each of the terms in this model. Namely, the first tests the equivalence of means across group levels, the second tests the equivalence of means across timepoints, and the third tests that the effect between group levels changes in time.
 
-* $y_{ij}\in\mathbb{R}$ is the response for the $j$-th measurement of the $i$-th subject
-* $b_0\in\mathbb{R}$ is the fixed intercept for the model
-* $b_k\in\mathbb{R}$ is the fixed slope for the $k$-th predictor or contrast
-* $x_{ijk}\in\mathbb{R}$ is the $j$-th measurement of the $k$-th predictor for the $i$-th subject
-* $v_{i0}\sim N(0,\sigma_0^2)$ is the random intercept for the $i$-th subject
-* $e_{ij}\sim N(0,\sigma_e^2)$ is a Gaussian error term
+In implementing the proper contrasts and statistical tests in R, we followed the recommendations  [here](https://rstudio-pubs-static.s3.amazonaws.com/65059_586f394d8eb84f84b1baaf56ffb6b47f.html) and [here](https://mcfromnz.wordpress.com/2011/03/02/anova-type-iiiiii-ss-explained/), by using the zero-sum contrast `contr.sum`, and conducting tests based on the type-III sums of squares by using the `Anova(..., type="III")` function in the `car` package. Type-III sums of squares test a main effect after the other main effect and interaction. The significance estimates are therefore valid in the presence of significant interactions. 
 
 
-The fundamental assumptions of this model are:
-
-* the relationship between X and Y is linear
-* $x_{ijk}$ and $y_{ij}$ are observed random variables 
-* $v_{i0} \sim N(0,\sigma_v^2)$ is an unobserved random variable, being the random intercept for the $i$-th subject
-* $\epsilon_{ij}\sim N(0,\sigma_e^2)$ is an unobserved random variable, being the Gaussian error term
-* $v_{i0}$ and $e_{ij}$ are independent of one another
-* $b_0$ and $b_1$ are unknown constants, being the fixed intercept and fixed slope for the regression model
-* $(y_{ij}|x_{ij})\sim N(b_0+b_1 x_{ij}, \sigma_Y^2)$ where $\sigma_Y^2=\sigma_v^2+\sigma_e^2$
-
-In implementing the contrasts and statistical tests in R, we followed the advice found  [here](https://rstudio-pubs-static.s3.amazonaws.com/65059_586f394d8eb84f84b1baaf56ffb6b47f.html) and [here](https://mcfromnz.wordpress.com/2011/03/02/anova-type-iiiiii-ss-explained/), by using zero-sum contrast `contr.sum`, and obtaining type 3 sums of squares using the `car` package. Type 3 sums of squares look like $S(A|B,AB)$, and test a main effect after the other main effect and interaction. The significance estimates are therefore valid in the presence of significant interactions. 
-
-We would have also heeded the [guidelines](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3672519/) on including random slopes for the within factor when testing for interactions, but the number of random effects would have exceeded teh number of observations.
-
-
-```{r, cache = T}
+```{r lmer, cache = TRUE}
 
 
 # make sure column names are valid R variables before fitting
@@ -295,11 +288,11 @@ anovatable <- lapply(1:length(anovatable.0), function(ii){
 ```
 
 
-### False Discovery Rate
+## Local false discovery rate
 
-In all, there were `r length(anovatable)` models fit, each with `r nrow(anovatable[[1]])` terms, for a total of `r length(anovatable)*nrow(anovatable[[1]])` hypotheses tested. We estimated local false discovery rates and $q$-values using the `fdrtool` package, which produced three figures illustrating the mixture model of the $p$-value distribution and the local false discovery rate.
+In all, there were `r length(anovatable)` models fit, each with `r nrow(anovatable[[1]])` terms, for a total of `r length(anovatable)*nrow(anovatable[[1]])` hypotheses tested. We estimated local false discovery rates and $q$-values using the `fdrtool` package, which alsp produced three figures illustrating the mixture model of the $p$-value distribution and the local false discovery rate.
 
-```{r, fig.height = 12, cache = T}
+```{r fdr, fig.height = 12, cache = TRUE, fig.cap="Figure 2: Local false discovery rate"}
 # compute fdr
 models <- as.data.frame(do.call(rbind, anovatable))
 fdrobj <- fdrtool(models$`Pr(>Chisq)`, statistic = "pvalue", verbose = F)
@@ -310,11 +303,11 @@ anovatable.fdr <- split(models, models$testid)
 ```
 
 
-## Results
+## Statistically significant results
 
-We reported all results with $q<0.10$ as statistically significant.
+We ranked the discoveries by $p$-value, and reported all results with $q<$ `r FDRcutoff` as statistically significant.
 
-```{r, cache = T}
+```{r signifresults, cache = TRUE}
 # collect pvalues and qvalues into matrix
 models.fdr <- do.call(rbind, anovatable.fdr)
 qmat <- dcast(models.fdr, group+parameter~variable, value.var = "qval")
@@ -347,7 +340,8 @@ resulttable <- do.call(rbind, apply(which(qmask != "", arr.ind = T), 1, function
                group = qmat$group[x[1]], 
                parameter = qmat$parameter[x[1]], 
                pvalue = pmat[,-c(1,2)][x[1], x[2]], 
-               qvalue = qmat[,-c(1,2)][x[1], x[2]])
+               qvalue = qmat[,-c(1,2)][x[1], x[2]],
+               stars = p2stars(pmat[,-c(1,2)][x[1], x[2]]))
 }))
 
 resulttable.sort <- resulttable[order(resulttable$pvalue), , drop = F]
@@ -358,7 +352,7 @@ resulttable.sort %>%
     #     pvalue = cell_spec(pvalue, color = ifelse(resulttable.sort$pvalue > pcutoff, "grey", "green")),
     #     qvalue = cell_spec(qvalue, color = ifelse(resulttable.sort$qvalue > FDRcutoff, "grey", "green"))
     # ) %>% 
-    kable(escape = F, row.names = T) %>%
+    kable(escape = F, row.names = T, caption = "Table 3: Statistically significant results") %>%
     kable_styling(bootstrap_options = c("striped", 
                                         "hover", 
                                         "condensed",
@@ -368,13 +362,10 @@ resulttable.sort %>%
 
 ```
 
+## Post-hoc tests
 
 
-
-## Figures {.tabset .tabset-fade .tabset-pills}
-
-```{r, results = 'asis', message = F, warning=F}
-
+```{r posthoc, message = F, warning = F, cache = TRUE}
 # long
 df.long <- melt(df.HMII, id.vars = colnames(df)[1:13])
 names(df.long) <- make.names(names(df.long))
@@ -382,42 +373,148 @@ names(df.long) <- make.names(names(df.long))
 # list of identifiers for significant results to plot
 unique_results <- unique(resulttable.sort[,c("biomarker","group")])
 
+# compute group means and CI using emmeans
+posthoc.means <- lapply(1:nrow(unique_results), function(ii){
+     testid <- unique(models.fdr$testid[models.fdr$variable == unique_results$biomarker[ii] & 
+                                        models.fdr$group == unique_results$group[ii]])
+     posthoc_group <- emmeans(models.HMII[[testid]]$model, 
+                             as.character(unique_results$group[ii]), 
+                             by = "Time"
+                             #lmer.df = "satterthwaite"
+                             )
+     return(posthoc_group)
+})
+
+# compute posthoc tests
+posthoc.tests.0 <- lapply(posthoc.means, function(this_means){
+     tests <- contrast(this_means, "pairwise", reverse = T)
+     posthoc_summary <- rbind(tests, adjust = "none")
+     posthoc.df <- as.data.frame(posthoc_summary)
+     #posthoc.df$bonferroni <- p.adjust(posthoc.df$p.value, method = "bonferroni")
+     #posthoc.df$stars <- sapply(posthoc.df$p.value, p2stars)
+     return(posthoc.df)
+})
+
+# get longform for FDR adjustment
+posthoc.tests.all <- do.call(rbind, lapply(1:length(posthoc.tests.0), function(ii){
+    posthoc.tests.0[[ii]]$id <- rep(ii, nrow(posthoc.tests.0[[ii]]))
+    posthoc.tests.0[[ii]]
+}))
+
+# compute q-values over all tests
+posthoc.tests.all$q.value <- p.adjust(posthoc.tests.all$p.value, method = "BH")
+posthoc.tests.all$stars <- sapply(posthoc.tests.all$p.value, p2stars)
+posthoc.tests <- split(posthoc.tests.all, posthoc.tests.all$id)
+
+# collapse posthoc.means into dataframes for plotting
+posthoc.means.df <- lapply(posthoc.means, function(this_means){
+    this_df <- as.data.frame(this_means)
+    this_df
+})
+
+
+```
+
+
+We did posthoc tests for all mixed effect models previously flagged as significant ($q<$ `r FDRcutoff`). Each grouping was evaluated at every timepoint, using the `emmeans` package to compute confidence intervals and statistical significance of the observed effects.
+
+The `emmeans` package package provides methods for obtaining estimated marginal means (EMMs, also known as least-squares means) for factor combinations in mixed-effect models. Estimated marginal means (see [Searle et al. 1980](https://doi.org/10.1080/00031305.1980.10483031)) are popular for summarizing linear models that include factors. According to its documentation, the EMMs are based on the mixed-effect model – not directly on data. They are computed on a reference grid consisting of all combinations of factor levels, with each covariate set to its average. EMMs are then predictions on this reference grid, or marginal averages thereof (equally weighted by default). For balanced experimental designs, they are just the marginal means. For unbalanced data, they in essence estimate the marginal means you would have observed that the data arisen from a balanced experiment.
+
+After all models were evaluated, we adjusted the `r nrow(na.omit(posthoc.tests.all))` resulting $p$-values using the Benjamini-Hochberg method to obtain $q$-values.
+
+## Post-hoc figures {.tabset .tabset-fade .tabset-pills}
+
+We plotted results for each of the statistically significant associations ($q<$ `r FDRcutoff`). We plotted time on the x-axis, and biomarker level on the y-axis, with patients in different groups shown using different colors. Values for each individual patient are shown in the background with high transparency. Superimposed on top are the estimated marginal means and standard error bars found by `emmeans`, which we pieced together for display using LOESS regression.
+
+```{r timeplots, results = 'asis', message = F, warning=F, cache=TRUE, fig.cap = "Figure 3: Biomarker profile"}
+
 # make all timeseries plots
 plots.ts <- mclapply(1:nrow(unique_results), function(ii){
     this_var <- as.character(unique_results[ii, "biomarker"])
     this_groups <- as.character(unique_results[ii, "group"])
     this_df.0 <- droplevels(subset(df.long, df.long$variable == this_var))
+    this_df <- droplevels(this_df.0[!is.na(this_df.0$value),]) # drop NAs
+    
+    # get emmeans with CI
+    this_posthoc <- posthoc.means.df[[ii]]
+    
+    this_df.0 <- droplevels(subset(df.long, df.long$variable == this_var))
     this_df <- droplevels(this_df.0[!is.na(this_df.0$value),])
-    ggplot(this_df) +
-        aes(x = Time, y = value, group = PatientID) +
-        aes_string(color = this_groups, fill = this_groups) +
-        geom_line(alpha = 0.2) + 
-        geom_point(alpha = 0.1) + 
-        stat_summary(fun.y = mean, 
-                     aes_string(group = this_groups), 
-                     geom=c("point"), 
-                     position = position_dodge(.5)) + 
-        stat_summary(fun.y = mean, 
-                     aes_string(group = this_groups), 
-                     geom=c("line"), 
-                     size = 2, 
-                     position = position_dodge(.5)) + 
-        # stat_smooth(method = "loess", 
-        #             aes_string(group = this_groups), 
-        #             size = .01, 
-        #             span = 1, 
-        #             alpha = 0.1) + 
-        stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), 
-                    mapping = aes_string(group = this_groups), 
-                    position = position_dodge(.5)) + 
+    
+    gg.em <- ggplot(this_posthoc) +
+        aes(x = as.numeric(as.character(Time)), y = emmean) + 
+        aes_string(group = this_groups, 
+                   color = this_groups, 
+                   fill = this_groups) +
+        geom_line(data = this_df, 
+                  aes(group = PatientID,
+                      y = value), 
+                      alpha = .2, 
+                      position=position_dodge(0.5)) +
+        geom_point(data = this_df, 
+                  aes(group = PatientID,
+                      y = value), 
+                      alpha = .1, 
+                      position=position_dodge(0.5)) +
+        geom_point(alpha = 1, position=position_dodge(0.5)) + 
+        geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width=1,
+                      position=position_dodge(0.5)) +
+        stat_smooth(method = "loess",
+                    aes_string(group = this_groups),
+                    size = 1,
+                    span = .5,
+                    se = F,
+                    alpha = 0.1,
+                    position=position_dodge(0.5)) +
         scale_color_aaas() + scale_fill_aaas() +
         xlab("Time (days after surgery)") +
         ylab(this_var) + 
         scale_x_continuous(breaks = unique(this_df$Time)) +
         ggtitle(paste(this_var)) +
         theme_classic()
+    gg.em
 }, mc.cores = detectCores()-1)
+
 names(plots.ts) <- paste(unique_results$biomarker, unique_results$group, sep = " | ")
+
+
+
+# # make all timeseries plots
+# plots.ts <- mclapply(1:nrow(unique_results), function(ii){
+#     this_var <- as.character(unique_results[ii, "biomarker"])
+#     this_groups <- as.character(unique_results[ii, "group"])
+#     this_df.0 <- droplevels(subset(df.long, df.long$variable == this_var))
+#     this_df <- droplevels(this_df.0[!is.na(this_df.0$value),])
+#     ggplot(this_df) +
+#         aes(x = Time, y = value, group = PatientID) +
+#         aes_string(color = this_groups, fill = this_groups) +
+#         geom_line(alpha = 0.2) + 
+#         geom_point(alpha = 0.1) + 
+#         stat_summary(fun.y = mean, 
+#                      aes_string(group = this_groups), 
+#                      geom=c("point"), 
+#                      position = position_dodge(.5)) + 
+#         stat_summary(fun.y = mean, 
+#                      aes_string(group = this_groups), 
+#                      geom=c("line"), 
+#                      size = 2, 
+#                      position = position_dodge(.5)) + 
+#         # stat_smooth(method = "loess", 
+#         #             aes_string(group = this_groups), 
+#         #             size = .01, 
+#         #             span = 1, 
+#         #             alpha = 0.1) + 
+#         stat_sum_df(function(x) mean_cl_normal(x, conf.int = 0.68), 
+#                     mapping = aes_string(group = this_groups), 
+#                     position = position_dodge(.5)) + 
+#         scale_color_aaas() + scale_fill_aaas() +
+#         xlab("Time (days after surgery)") +
+#         ylab(this_var) + 
+#         scale_x_continuous(breaks = unique(this_df$Time)) +
+#         ggtitle(paste(this_var)) +
+#         theme_classic()
+# }, mc.cores = detectCores()-1)
+# names(plots.ts) <- paste(unique_results$biomarker, unique_results$group, sep = " | ")
 
 
 
@@ -425,6 +522,9 @@ names(plots.ts) <- paste(unique_results$biomarker, unique_results$group, sep = "
 for(ii in 1:length(plots.ts)){
     cat("  \n###", names(plots.ts)[ii], "\n")
     
+    suppressWarnings(print(plots.ts[[ii]]))
+    
+    cat("  \n")
     
     testid <- unique(models.fdr$testid[models.fdr$variable == unique_results$biomarker[ii] & 
                                            models.fdr$group == unique_results$group[ii]])
@@ -435,27 +535,25 @@ for(ii in 1:length(plots.ts)){
     #     pvalue = cell_spec(pvalue, color = ifelse(resulttable.sort$pvalue > pcutoff, "grey", "green")),
     #     qvalue = cell_spec(qvalue, color = ifelse(resulttable.sort$qvalue > FDRcutoff, "grey", "green"))
     # ) %>% 
-    kable(escape = F, row.names = F) %>%
+    kable(escape = F, row.names = F, caption = "Table 4a: Mixed effect model results") %>%
     kable_styling(bootstrap_options = c("striped", 
                                         "hover", 
                                         "condensed",
                                         "responsive"),
                   font_size = 10) %>%
     scroll_box(width = "100%"))
+   
     cat("  \n")
     
-    suppressWarnings(print(plots.ts[[ii]]))
-    cat("  \n")
+
+
     
-    model.summary <- summary(models.HMII[[testid]]$model)
-    this_summary <- as.data.frame(model.summary$coefficients)
-    this_summary$stars <- sapply(this_summary$`Pr(>|t|)`, p2stars)
-    print(this_summary %>%
+    print(posthoc.tests[[ii]] %>%          
     # mutate(
     #     pvalue = cell_spec(pvalue, color = ifelse(resulttable.sort$pvalue > pcutoff, "grey", "green")),
     #     qvalue = cell_spec(qvalue, color = ifelse(resulttable.sort$qvalue > FDRcutoff, "grey", "green"))
     # ) %>% 
-    kable(escape = F, row.names = T) %>%
+    kable(escape = F, row.names = T, caption = "Table 4b: Post-hoc test results") %>%
     kable_styling(bootstrap_options = c("striped", 
                                         "hover", 
                                         "condensed",
@@ -464,17 +562,21 @@ for(ii in 1:length(plots.ts)){
     scroll_box(width = "100%"))
     cat("  \n")
 
+    
+    
+    
 }
 
 ```
 
 
+# Identifying global patterns
 
-## Identification of clusters
+## Hierarchical clustering
 
-We double-standardized the data ( [Efron 2009](https://projecteuclid.org/euclid.aoas/1254773272)) and computed the correlation matrix for the biomarkers using all pairwise complete data. We then clustered the biomarkers using those correlations, and clustered the samples that remained after removing missing data. We also clustered by time, after collapsing each biomarker to only its mean level.
+We double-standardized the data ([Efron 2009](https://projecteuclid.org/euclid.aoas/1254773272)) and computed the correlation matrix for the biomarkers using all pairwise complete data. We then clustered the biomarkers using those correlations, and clustered the samples that remained after removing missing data. We also clustered by time, after collapsing each biomarker to only its mean level.
 
-```{r, message=F}
+```{r hclust, warning=FALSE, message=FALSE, cache = TRUE}
 
 # color palette for this section
 colorfun <- function(nlevels, func = pal_d3, ...){
@@ -545,11 +647,8 @@ names(annotation.colors$bicluster_optimal) <- levels(factor(annotation.row$biclu
 #          annotation_colors = annotation.colors,
 #          clustering_method = "ward.D2"
 # )
-```
 
 
-
-```{r, warning=FALSE, message=FALSE}
 # Temporal patterns
 
 compute_module_means <- function(modules, df.ds, metadata.cols = 1:13, FUN = mean){
@@ -608,12 +707,8 @@ df.modules.long <- lapply(df.modules, function(this_df.modules){
 #         theme_classic()
 # #print(g3)
 
-```
 
 
-
-
-```{r temporal_clusters, warning=F, message=F}
 # Temporal clusters
 
 df.ds.patients.0 <- split(df.ds, df.ds$PatientID)
@@ -663,11 +758,11 @@ nbclust.time <- fviz_nbclust(df.means,
 nclusters.timecluster <- as.numeric(as.character(nbclust.time$data$clusters[nbclust.time$data$y == max(nbclust.time$data$y)]))
 ```
 
-### Choosing the optimal number of clusters
+## Optimal number of clusters
 
 To determine the optimal number of clusters, we maximized the average silhouete width using the `factoextra` and `NbClust` packages.
 
-```{r}
+```{r nbclust, cache = TRUE, fig.cap = "Figure 4: Optimal number of clusters"}
 a <- nbclust + ggtitle("Optimal number of biomarker clusters")
 b <- nbclust.time + ggtitle("Optimal number of timeclusters")
 grid.arrange(a,b,ncol = 1)
@@ -676,7 +771,7 @@ grid.arrange(a,b,ncol = 1)
 
 
 
-```{r}
+```{r annotations, cache = TRUE}
 # Temporal patterns
 
 # do optimal clustering
@@ -702,9 +797,9 @@ annotation.row.hits$significant[rownames(annotation.row) %in% hits] <- 1
 
 ```
 
-### Biclustering patterns
+## Biclustering patterns
 
-```{r, fig.height=10}
+```{r heatmap_biclust, fig.height=10, cache = TRUE, fig.cap="Figure 5: Biclustering"}
 # make biclustering heatmap
 pheatmap(df.patient, 
          color = colorRampPalette(rev(brewer.pal(n = 10, name = "RdBu")))(100),
@@ -731,9 +826,9 @@ pheatmap(df.patient,
 )
 ```
 
-### Temporal patterns
+## Time clustering patterns
 
-```{r, fig.height=9}
+```{r heatmap_timeclust, fig.height=9, cache = TRUE, fig.cap="Figure 6: Temporal clustering"}
 pheatmap(df.means, 
          color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
          breaks = c(seq(-max(abs(df.means), na.rm=T), 0, length.out = 50), 
@@ -754,84 +849,17 @@ pheatmap(df.means,
          clustering_method = "ward.D2",
          labels_col = means.wide$Time,
          border_color = NA,
-         main = "Temporal Clusters"
+         main = "Timeclusters"
 )
 
 ```
 
-We tested for overlap between the biomarker clusters and the timeclusters using Fisher's exact test.
 
-```{r}
-this_table <- table(cbind(annotation.row.time[,2,drop=F],
-                          annotation.row[, 3, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-We tested for overlap between the statistically significant biomarkers and the optimal biomarker clusters using Fisher's exact test.
-
-```{r}
-this_table <- table(cbind(annotation.row[,2, drop=F],
-                          annotation.row.hits[,1, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-
-We tested for overlap between the statistically significant biomarkers and the timeclusters using Fisher's exact test.
-
-```{r}
-this_table <- table(cbind(annotation.row.time[,2, drop=F],
-                          annotation.row.hits[,1, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-
-
-We tested for overlap between statistically significant biomarkers and their biomarker type.
-
-```{r}
-this_table <- table(cbind(annotation.row[,1, drop=F],
-                          annotation.row.hits[,1, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-We tested for overlap between optimal biomarker clusters and biomarker type.
-
-```{r}
-this_table <- table(cbind(annotation.row[,1, drop=F],
-                          annotation.row[,2, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-We tested for overlap between biomarker metaclusters and biomarker type.
-
-```{r}
-this_table <- table(cbind(annotation.row[,1, drop=F],
-                          annotation.row[,3, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-We tested for overlap between timeclusters and biomarker type.
-
-
-```{r}
-this_table <- table(cbind(annotation.row[,1, drop=F],
-                          annotation.row.time[,2, drop=F]))
-this_table  
-fisher.test(this_table)
-```
-
-
-### Timecluster Timeseries
+### Timeseries
 
 We depicted each biomarker cluster's temporal pattern as a smooth function of time, using a LOESS regression model. There are clear temporal dynamics occurring at multiple timescales.
 
-```{r, warning=F, message=F}
+```{r timeseries, warning=F, message=F, cache = TRUE, fig.cap="Figure 7: Time cluster profile"}
 colnames(df.means) <- unique(means.long$Time)
 df.means$timecluster <- factor(timeclusters)
 df.means$biomarker <- rownames(df.means)
@@ -863,14 +891,167 @@ gg.time <- ggplot(df.clustermeans) +
                  aes(group = timecluster), 
                  geom=c("point"), 
                  position = position_dodge(.5)) +
-    stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), 
-                mapping = aes(group = timecluster), 
-                position = position_dodge(.5)) + 
+    # stat_sum_df(function(x) mean_cl_boot(x, conf.int = 0.68), 
+    #             mapping = aes(group = timecluster), 
+    #             position = position_dodge(.5)) + 
     scale_color_d3() + 
     scale_fill_d3() + 
     theme_classic()
 
 print(gg.time)
 ```
+
+
+## Cluster statistics {.tabset .tabset-pills}
+
+### Biomarker clusters and timeclusters
+
+We tested for overlap between the biomarker clusters and the timeclusters using Fisher's exact test.
+
+```{r, results = 'asis'}
+this_table <- table(cbind(annotation.row.time[,2,drop=F],
+                          annotation.row[, 3, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
+### Biomarker clusters and hits
+
+We tested for overlap between the statistically significant biomarkers and the optimal biomarker clusters using Fisher's exact test.
+
+```{r, results = 'asis'}
+this_table <- table(cbind(annotation.row.hits[,1, drop=F],
+                          annotation.row[,2, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
+### Timeclusters and hits
+
+We tested for overlap between the statistically significant biomarkers and the timeclusters using Fisher's exact test.
+
+```{r, results = 'asis'}
+this_table <- table(cbind(annotation.row.hits[,1, drop=F],
+                          annotation.row.time[,2, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
+
+### Biomarker type and hits
+
+We tested for overlap between statistically significant biomarkers and their biomarker type.
+
+```{r, results = 'asis'}
+this_table <- table(cbind(annotation.row[,1, drop=F],
+                          annotation.row.hits[,1, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
+### Biomarker clusters and types
+
+We tested for overlap between optimal biomarker clusters and biomarker type.
+
+```{r, results = 'asis'}
+this_table <- table(cbind(annotation.row[,1, drop=F],
+                          annotation.row[,2, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
+### Biomarker metaclusters and types
+
+We tested for overlap between biomarker metaclusters and biomarker type.
+
+```{r, results='asis'}
+this_table <- table(cbind(annotation.row[,1, drop=F],
+                          annotation.row[,3, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
+### Timeclusters and types
+
+We tested for overlap between timeclusters and biomarker type.
+
+
+```{r, results = 'asis'}
+this_table <- table(cbind(annotation.row[,1, drop=F],
+                          annotation.row.time[,2, drop=F]))
+print(this_table %>% kable(escape = F, row.names = T, caption = "Table 5: Contingency table") %>%
+    kable_styling(bootstrap_options = c("striped", 
+                                        "hover", 
+                                        "condensed",
+                                        "responsive"),
+                  font_size = 10) %>%
+    scroll_box(width = "100%"))
+
+cat("  \n")
+
+```
+
+Fisher's exact test $p=$ `r signif(fisher.test(this_table)$p.value, 3)` 
+
 
 
