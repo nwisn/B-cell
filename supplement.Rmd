@@ -1,7 +1,7 @@
 ---
 title: "Temporal expression of cytokines and B-cell phenotypes during mechanical circulatory support"
 subtitle: "Supplemental material"
-author: "Nicholas Wisniewski \n\n"
+author: "Nicholas Wisniewski"
 abstract: This Rmarkdown notebook performs all of the statistical analysis for the associated manuscript. We included it in an effort to improve reproducibilty, by providing full transparency concerning our statistical methods. After downloading the dataset and installing all the required R packages, this entire html file (including all the figures) can be created using Knitr. 
 output:
   html_document:
