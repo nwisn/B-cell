@@ -1,6 +1,6 @@
 # Statistical supplement
 
-This Rmarkdown notebook performs all of the statistical analysis for the associated manuscript. We included it in an effort to improve reproducibilty and provide full transparency regarding our statistical methods. After downloading the dataset and installing all the required R packages, the entire html file (including all the figures) can be created using Knitr.
+This [Rmarkdown notebook](https://nickwisniewski.com/B-cell/supplement.Rmd) performs all of the statistical analysis for the associated manuscript. We included it in an effort to improve reproducibilty and provide full transparency regarding our statistical methods. After downloading the dataset and installing all the required R packages, the entire [html file](https://nickwisniewski.com/B-cell/supplement.html) (including all the figures) can be created using Knitr.
 
 ## Summary
 
