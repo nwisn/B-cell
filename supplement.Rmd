@@ -312,6 +312,7 @@ We ranked the discoveries by $p$-value, and reported all results with $q<$ `r FD
 models.fdr <- do.call(rbind, anovatable.fdr)
 qmat <- dcast(models.fdr, group+parameter~variable, value.var = "qval")
 pmat <- dcast(models.fdr, group+parameter~variable, value.var = "Pr(>Chisq)")
+lfdrmat <- dcast(models.fdr, group+parameter~variable, value.var = "lfdr")
 
 # find significant results and mark with text qvalue
 qmask <- signif(qmat[,-c(1,2)], 2)
@@ -341,6 +342,7 @@ resulttable <- do.call(rbind, apply(which(qmask != "", arr.ind = T), 1, function
                parameter = qmat$parameter[x[1]], 
                pvalue = pmat[,-c(1,2)][x[1], x[2]], 
                qvalue = qmat[,-c(1,2)][x[1], x[2]],
+               lfdr = lfdrmat[,-c(1,2)][x[1], x[2]],
                stars = p2stars(pmat[,-c(1,2)][x[1], x[2]]))
 }))
 
