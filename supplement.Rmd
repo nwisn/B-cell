@@ -268,7 +268,7 @@ groups.by.vars <- unlist(lapply(make.names(groups, unique = T), function(this_gr
 # fit all models in parallel
 models.HMII <- mclapply(groups.by.vars, function(this_e){
     anova.fit(this_e$group, this_e$variable, df.HMII.valid)
-})
+},  mc.cores = detectCores()-1)
 
 # compute statistics in parallel
 anovatable.0 <- mclapply(models.HMII, function(this_model_obj){
@@ -852,6 +852,78 @@ pheatmap(df.means,
          labels_col = means.wide$Time,
          border_color = NA,
          main = "Timeclusters"
+)
+
+```
+
+
+
+### Separate heatmaps for each biomarker set {.tabset .tabset-pills}
+
+At the request of reviewers, we have split the previous heatmap (Figure 6) into two heatmaps: one for only B-cells, and one for only cytokines. Note that this does not change any of the clustering assignments previously determined, nor any of the clustering analysis that follows (to do so would unnecessarily complicate the unified analysis). *This section exists only for the purpose of visualization*. 
+
+
+#### Temporal clustering of B-cells
+
+```{r heatmap_timeclust_Bcell, fig.height=4.5, cache = TRUE, fig.cap="Figure 6.1a: Temporal clustering of B-cells"}
+df.means.bcell <- subset(df.means, annotation.row$biomarker == "B-cell")
+tree.timecluster.bcell <- hclust(as.dist((1-cor(t(df.means.bcell), use = "p"))/2), 
+               method = "ward.D2")
+pheatmap(df.means.bcell, 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+         breaks = c(seq(-max(abs(df.means.bcell), na.rm=T), 0, length.out = 50), 
+                    seq(0.001, max(abs(df.means.bcell), na.rm=T), length.out = 50)),
+         fontsize = 7,
+         cutree_rows = 4,
+         cutree_cols = 1,
+         cluster_cols = F,
+         cluster_rows = tree.timecluster.bcell,
+         #annotation_col = annotation.col,
+         # annotation_row = cbind(annotation.row, 
+         #                        time_cluster = factor(annotation.row.time$time_cluster)),
+         annotation_row = cbind(
+                                #annotation.row.time[annotation.row$biomarker == "B-cell",1,drop=F], 
+                                annotation.row.time[annotation.row$biomarker == "B-cell",2,drop=F],
+                                annotation.row[annotation.row$biomarker == "B-cell",c(3),drop=F],
+                                annotation.row.hits[annotation.row$biomarker == "B-cell",1,drop=F]
+                                ),
+         annotation_colors = c(annotation.colors, annotation.colors.time),
+         clustering_method = "ward.D2",
+         labels_col = means.wide$Time,
+         border_color = NA,
+         main = "Timeclusters for B-cells"
+)
+
+```
+
+#### Temporal clustering of cytokines
+
+```{r heatmap_timeclust_cytokine, fig.height=5.1, cache = TRUE, fig.cap="Figure 6.1b: Temporal clustering of cytokines"}
+df.means.cytokine <- subset(df.means, annotation.row$biomarker == "cytokine")
+tree.timecluster.cytokine <- hclust(as.dist((1-cor(t(df.means.cytokine), use = "p"))/2), 
+               method = "ward.D2")
+pheatmap(df.means.cytokine, 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+         breaks = c(seq(-max(abs(df.means.cytokine), na.rm=T), 0, length.out = 50), 
+                    seq(0.001, max(abs(df.means.cytokine), na.rm=T), length.out = 50)),
+         fontsize = 7,
+         cutree_rows = 4,
+         cutree_cols = 1,
+         cluster_cols = F,
+         cluster_rows = tree.timecluster.cytokine,
+         #annotation_col = annotation.col,
+         # annotation_row = cbind(annotation.row, 
+         #                        time_cluster = factor(annotation.row.time$time_cluster)),
+         annotation_row = cbind(
+                                #annotation.row.time[annotation.row$biomarker == "cytokine",1,drop=F], 
+                                annotation.row.time[annotation.row$biomarker == "cytokine",2,drop=F],
+                                annotation.row[annotation.row$biomarker == "cytokine",c(3),drop=F],
+                                annotation.row.hits[annotation.row$biomarker == "cytokine",1,drop=F]),
+         annotation_colors = c(annotation.colors, annotation.colors.time),
+         clustering_method = "ward.D2",
+         labels_col = means.wide$Time,
+         border_color = NA,
+         main = "Timeclusters for cytokines"
 )
 
 ```
