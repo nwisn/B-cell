@@ -793,10 +793,13 @@ names(annotation.colors.time$time_cluster) <- factor(unique(annotation.row.time$
 # annotation.colors.time$bicluster <- annotation.colors$bicluster
 
 hits <- as.character(unique(resulttable$biomarker))
-annotation.row.hits <- data.frame(significant = rep(0, nrow(annotation.row)), 
+annotation.row.hits <- data.frame(significance = rep(0, nrow(annotation.row)), 
                                   row.names = rownames(annotation.row))
-annotation.row.hits$significant[rownames(annotation.row) %in% hits] <- 1
+annotation.row.hits$significance[rownames(annotation.row) %in% hits] <- 1
 
+# change to factor
+annotation.row.hits$significance <- revalue(factor(annotation.row.hits$significance), c("0"="not significant", "1"="significant"))
+annotation.colors.time$significance <- c("not significant" = "lightgrey", "significant" = "darkgreen")
 ```
 
 ## Biclustering patterns
@@ -883,8 +886,8 @@ pheatmap(df.means.bcell,
          #                        time_cluster = factor(annotation.row.time$time_cluster)),
          annotation_row = cbind(
                                 #annotation.row.time[annotation.row$biomarker == "B-cell",1,drop=F], 
-                                annotation.row.time[annotation.row$biomarker == "B-cell",2,drop=F],
-                                annotation.row[annotation.row$biomarker == "B-cell",c(3),drop=F],
+                                #annotation.row.time[annotation.row$biomarker == "B-cell",2,drop=F],
+                                #annotation.row[annotation.row$biomarker == "B-cell",c(3),drop=F],
                                 annotation.row.hits[annotation.row$biomarker == "B-cell",1,drop=F]
                                 ),
          annotation_colors = c(annotation.colors, annotation.colors.time),
@@ -916,8 +919,8 @@ pheatmap(df.means.cytokine,
          #                        time_cluster = factor(annotation.row.time$time_cluster)),
          annotation_row = cbind(
                                 #annotation.row.time[annotation.row$biomarker == "cytokine",1,drop=F], 
-                                annotation.row.time[annotation.row$biomarker == "cytokine",2,drop=F],
-                                annotation.row[annotation.row$biomarker == "cytokine",c(3),drop=F],
+                                #annotation.row.time[annotation.row$biomarker == "cytokine",2,drop=F],
+                                #annotation.row[annotation.row$biomarker == "cytokine",c(3),drop=F],
                                 annotation.row.hits[annotation.row$biomarker == "cytokine",1,drop=F]),
          annotation_colors = c(annotation.colors, annotation.colors.time),
          clustering_method = "ward.D2",
