@@ -932,6 +932,44 @@ pheatmap(df.means.cytokine,
 ```
 
 
+#### Only Significant B-Cells/Cytokines
+
+At the request of editors, we further generated a heatmap of only the B-cells/cytokines with statistically significant associations.
+
+```{r heatmap_signif_bcells_cytokines, fig.height=4, cache = TRUE, fig.cap="Figure 6.1c: Temporal clustering of significant B-cells and cytokines"}
+keepsignif <- annotation.row.hits$significance == "significant"
+tree.timecluster.signifs <- hclust(as.dist((1-cor(t(df.means[keepsignif,]), use = "p"))/2), 
+               method = "ward.D2")
+
+pheatmap(df.means[keepsignif,], 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+         breaks = c(seq(-max(abs(df.means), na.rm=T), 0, length.out = 50), 
+                    seq(0.001, max(abs(df.means), na.rm=T), length.out = 50)),
+         fontsize = 7,
+         cutree_rows = 4,
+         cutree_cols = 1,
+         cluster_cols = F,
+         cluster_rows = tree.timecluster.signifs,
+         #annotation_col = annotation.col,
+         # annotation_row = cbind(annotation.row, 
+         #                        time_cluster = factor(annotation.row.time$time_cluster)),
+         annotation_row = cbind(annotation.row.time[keepsignif,1,drop=F] 
+                                #annotation.row.time[keepsignif,2,drop=F],
+                                #annotation.row[keepsignif,c(3,2),drop=F],
+                                #annotation.row.hits[keepsignif,1,drop=F]
+                                ),
+         annotation_colors = c(annotation.colors, annotation.colors.time),
+         clustering_method = "ward.D2",
+         labels_col = means.wide$Time,
+         border_color = NA,
+         main = "Temporal Profile"
+)
+```
+
+
+
+
+
 ### Timeseries
 
 We depicted each biomarker cluster's temporal pattern as a smooth function of time, using a LOESS regression model. There are clear temporal dynamics occurring at multiple timescales.
